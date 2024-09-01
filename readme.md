@@ -4,10 +4,10 @@
 
 ## Features
 
-- Benchmarks CPU performance with floating-point operations per second (GFLOPS)
-- Benchmarks GPU performance with floating-point operations per second (TFLOPS) 
-  - Supports CUDA GPUs and Metal Performance Shaders (MPS) for Apple Silicon
-- Check if device has a battery and returns state of charge
+- Benchmark CPU performance for floating-point operations per second (GFLOPS)
+- Benchmark GPU performance for floating-point operations per second (TFLOPS) 
+  - Support for CUDA GPUs and Metal Performance Shaders (MPS) for Apple Silicon
+- Check if device has a battery and returns state of charge, charging state and capacity
 
 ## Usage
 

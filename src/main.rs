@@ -81,6 +81,8 @@ fn generate_json_output(
          "battery_info": {
             "has_battery": battery_info.has_battery,
             "charge_percent": battery_info.charge_percent,
+            "is_charging": battery_info.is_charging,
+            "wh_capacity": battery_info.wh_capacity,
         }
     }))
     .map_err(Into::into)
@@ -111,7 +113,7 @@ fn format_cpu_info(
     cpu_elapsed_time: f64,
 ) -> String {
     format!(
-        "=> CPU Bench:\n\
+        "=> CPU:\n\
         OS          : {:?}\n\
         OS version  : {}\n\
         Memory Total: {} mb\n\
@@ -137,15 +139,23 @@ fn format_cpu_info(
 
 fn format_battery_info(battery_info: &BatteryInfo) -> String {
     let charge = if battery_info.charge_percent.is_some() {
-        battery_info.charge_percent.unwrap().to_string()
+        format!("{}%", battery_info.charge_percent.unwrap().to_string())
     } else {
-        "NA".to_string()
+        "None".to_string()
     };
+    let capacity = if battery_info.wh_capacity.is_some() {
+        format!("{} Wh", battery_info.wh_capacity.unwrap().to_string())
+    } else {
+        "None".to_string()
+    };
+
     format!(
         "=> Power:\n\
-        Battery        : {:?}\n\
-        State of charge: {}%\n\n",
-        battery_info.has_battery, charge
+        Battery         : {:?}\n\
+        State of charge : {}\n\
+        Charging        : {:?}\n\
+        Capacity        : {}\n\n",
+        battery_info.has_battery, charge, battery_info.is_charging.unwrap_or(false), capacity
     )
 }
 
@@ -182,10 +192,10 @@ fn benchmark_cuda_gpus() -> io::Result<Vec<serde_json::Value>> {
 fn format_mps_gpu_info() -> String {
     let (gpu_tflops, gpu_elapsed_time) = benchmark_gpu(Device::Mps, 1000);
     format!(
-        "=> GPU Bench:\n\
+        "=> GPU:\n\
         GPU: integrated (MPS)\n\
         GPU FLOPS: {:.2} TFLOPS\n\
-        GPU benchmark duration: {:.2} seconds\n",
+        GPU benchmark duration: {:.2} seconds\n\n",
         gpu_tflops, gpu_elapsed_time
     )
 }
