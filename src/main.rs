@@ -12,100 +12,170 @@ use std::fs::File;
 use std::io::{self, Write};
 use tch::Device;
 
+
 fn main() -> io::Result<()> {
     let matches = configure_cli();
-    let output_format = matches.get_one::<String>("output").unwrap();
+    let output_format = matches.get_one::<String>("format").unwrap();
     let output_file = matches.get_one::<String>("outputFile");
+    let features: Vec<&String> = matches.get_many::<String>("features").unwrap().collect();
 
-    let cpu_info = get_cpu_info();
-    let (cpu_gflops, cpu_elapsed_time) = benchmark_cpu(5);
-    let battery_info = get_battery_info();
+    let mut cpu_info = None;
+    let mut cpu_gflops = None;
+    let mut cpu_elapsed_time = None;
+    let mut battery_info = None;
+    let mut gpu_results = None;
+
+    if features.contains(&&"cpu".to_string()) {
+        let cpu_info_data = get_cpu_info();
+        let (gflops, elapsed_time) = benchmark_cpu(5);
+        cpu_info = Some(cpu_info_data);
+        cpu_gflops = Some(gflops);
+        cpu_elapsed_time = Some(elapsed_time);
+    }
+
+    if features.contains(&&"gpu".to_string()) {
+        let supports_mps = cpu_info.as_ref().map_or(false, |info| {
+            info.arch == Some("arm64".to_string()) && info.os == "macos"
+        });
+        gpu_results = if supports_mps {
+            Some(benchmark_mps_gpu()?)
+        } else {
+            Some(benchmark_cuda_gpus()?)
+        };
+    }
+
+    if features.contains(&&"battery".to_string()) {
+        battery_info = Some(get_battery_info());
+    }
 
     let output = match output_format.as_str() {
-        "json" => generate_json_output(&cpu_info, cpu_gflops, cpu_elapsed_time, &battery_info)?,
-        _ => generate_plain_output(&cpu_info, cpu_gflops, cpu_elapsed_time, &battery_info),
+        "json" => generate_json_output(
+            cpu_info.as_ref(),
+            cpu_gflops,
+            cpu_elapsed_time,
+            battery_info.as_ref(),
+            gpu_results.as_ref(),
+        )?,
+        _ => generate_plain_output(
+            cpu_info.as_ref(),
+            cpu_gflops,
+            cpu_elapsed_time,
+            battery_info.as_ref(),
+            gpu_results.as_ref(),
+        ),
     };
 
     write_output(output_file, &output)
 }
 
+
 fn configure_cli() -> clap::ArgMatches {
     Command::new("System Benchmark")
         .version("1.0")
-        .about("Benchmarks CPU and GPU performance")
+        .about("Benchmarks CPU and GPU performance, and provides battery information")
         .arg(
-            Arg::new("output")
-                .short('o')
-                .long("output")
+            Arg::new("format")
+                .short('f')
+                .long("format")
                 .value_name("FORMAT")
                 .help("Sets the output format: plain or json")
                 .default_value("plain"),
         )
         .arg(
             Arg::new("outputFile")
-                .short('f')
+                .short('o')
                 .long("outputFile")
-                .value_name("FILE")
+                .value_name("OUTPUT")
                 .help("Specifies the file to write the output to"),
+        )
+        .arg(
+            Arg::new("features")
+                .short('e')
+                .long("features")
+                .value_name("FEATURE")
+                .help("Select which benchmarks/features to run/enable: cpu, gpu, battery (comma-separated)")
+                .default_value("cpu,gpu,battery")
+                .use_value_delimiter(true),
         )
         .get_matches()
 }
 
 fn generate_json_output(
-    cpu_info: &info::cpu::CpuInfo,
-    cpu_gflops: f64,
-    cpu_elapsed_time: f64,
-    battery_info: &BatteryInfo,
+    cpu_info: Option<&info::cpu::CpuInfo>,
+    cpu_gflops: Option<f64>,
+    cpu_elapsed_time: Option<f64>,
+    battery_info: Option<&BatteryInfo>,
+    gpu_results: Option<&Vec<serde_json::Value>>,
 ) -> io::Result<String> {
-    let supports_mps = cpu_info.arch == Some("arm64".to_string()) && cpu_info.os == "macos";
-    let gpu_results = if supports_mps {
-        benchmark_mps_gpu()?
-    } else {
-        benchmark_cuda_gpus()?
-    };
+    let mut output_json = serde_json::Map::new();
 
-    serde_json::to_string_pretty(&json!({
-        "cpu_info": {
-            "os": cpu_info.os,
-            "os_version": cpu_info.os_version.as_deref().unwrap_or("Not available"),
-            "total_memory_mb": cpu_info.total_memory,
-            "used_memory_mb": cpu_info.used_memory,
-            "total_swap_mb": cpu_info.total_swap,
-            "used_swap_mb": cpu_info.used_swap,
-            "arch": cpu_info.arch.as_deref().unwrap_or("Not available"),
-            "cpu_count": cpu_info.cpu_count,
-            "gflops": cpu_gflops,
-            "benchmark_duration_seconds": cpu_elapsed_time
-        },
-        "gpu_info": gpu_results,
-         "battery_info": {
-            "has_battery": battery_info.has_battery,
-            "charge_percent": battery_info.charge_percent,
-            "is_charging": battery_info.is_charging,
-            "wh_capacity": battery_info.wh_capacity,
-        }
-    }))
-    .map_err(Into::into)
+    if let Some(info) = cpu_info {
+        output_json.insert(
+            "cpu_info".to_string(),
+            json!({
+                "os": info.os,
+                "os_version": info.os_version.as_deref().unwrap_or("Not available"),
+                "total_memory_mb": info.total_memory,
+                "used_memory_mb": info.used_memory,
+                "total_swap_mb": info.total_swap,
+                "used_swap_mb": info.used_swap,
+                "arch": info.arch.as_deref().unwrap_or("Not available"),
+                "cpu_count": info.cpu_count,
+                "gflops": cpu_gflops.unwrap_or(0.0),
+                "benchmark_duration_seconds": cpu_elapsed_time.unwrap_or(0.0),
+            }),
+        );
+    }
+
+    if let Some(gpu) = gpu_results {
+        output_json.insert("gpu_info".to_string(), json!(gpu));
+    }
+
+    if let Some(battery) = battery_info {
+        output_json.insert(
+            "battery_info".to_string(),
+            json!({
+                "has_battery": battery.has_battery,
+                "charge_percent": battery.charge_percent,
+                "is_charging": battery.is_charging,
+                "wh_capacity": battery.wh_capacity,
+            }),
+        );
+    }
+
+    serde_json::to_string_pretty(&output_json).map_err(Into::into)
 }
 
 fn generate_plain_output(
-    cpu_info: &info::cpu::CpuInfo,
-    cpu_gflops: f64,
-    cpu_elapsed_time: f64,
-    battery_info: &BatteryInfo,
+    cpu_info: Option<&info::cpu::CpuInfo>,
+    cpu_gflops: Option<f64>,
+    cpu_elapsed_time: Option<f64>,
+    battery_info: Option<&BatteryInfo>,
+    gpu_results: Option<&Vec<serde_json::Value>>,
 ) -> String {
     let mut output = String::new();
-    output.push_str(&format_cpu_info(cpu_info, cpu_gflops, cpu_elapsed_time));
 
-    let supports_mps = cpu_info.arch == Some("arm64".to_string()) && cpu_info.os == "macos";
-    if supports_mps {
-        output.push_str(&format_mps_gpu_info());
-    } else {
-        output.push_str(&format_cuda_gpus_info());
+    if let Some(info) = cpu_info {
+        output.push_str(&format_cpu_info(info, cpu_gflops.unwrap_or(0.0), cpu_elapsed_time.unwrap_or(0.0)));
     }
-    output.push_str(&format_battery_info(battery_info));
+
+    if let Some(gpu) = gpu_results {
+        if let Some(supports_mps) = cpu_info.as_ref().map(|info| info.arch == Some("arm64".to_string()) && info.os == "macos") {
+            if supports_mps {
+                output.push_str(&format_mps_gpu_info());
+            } else {
+                output.push_str(&format_cuda_gpus_info());
+            }
+        }
+    }
+
+    if let Some(battery) = battery_info {
+        output.push_str(&format_battery_info(battery));
+    }
+
     output
 }
+
 
 fn format_cpu_info(
     cpu_info: &info::cpu::CpuInfo,
@@ -228,7 +298,6 @@ fn format_cuda_gpus_info() -> String {
 
     output
 }
-
 fn write_output(output_file: Option<&String>, output: &str) -> io::Result<()> {
     if let Some(file_path) = output_file {
         let mut file = File::create(file_path)?;

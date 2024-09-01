@@ -5,13 +5,13 @@
 ## Features
 
 - Benchmark CPU performance for floating-point operations per second (GFLOPS)
-- Benchmark GPU performance for floating-point operations per second (TFLOPS) 
+- Benchmark GPU performance for floating-point operations per second (TFLOPS)
   - Support for CUDA GPUs and Metal Performance Shaders (MPS) for Apple Silicon
 - Check if device has a battery and returns state of charge, charging state and capacity
 
 ## Usage
 
-```bash 
+```bash  
 cargo run --release
 ```
 
@@ -49,9 +49,10 @@ export LD_LIBRARY_PATH=${LIBTORCH}/lib:$LD_LIBRARY_PATH
 
 ## CLI options
 
-```bash 
--o, --output FORMAT: Sets the output format. Options are plain (default) or json.
--f, --outputFile FILE: Specifies the file to write the output to.
+```txt  
+-f, --format FORMAT: Sets the output format. Options are plain (default) or json.
+-o, --outputFile OUTPUT: Specifies the file to write the output to.
+-e, --features FEATURE: Select which benchmarks/features to run/enable: cpu, gpu, battery (comma-separated)
 ```
 
 ## To do
