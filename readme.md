@@ -1,6 +1,6 @@
 # quick-stats
 
-`quick-stats` is a basic tool for quickly assessing a computer's stats.
+`quick-stats` is a basic tool for quickly assessing a computer's performance and environment
 
 ## Features
 
