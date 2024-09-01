@@ -28,7 +28,7 @@ cargo run --release
   - speed
   - ping
   - ip
-- Power source
+- Add power source monitoring
   - battery
-  - charge state
-
+  - state of charge
+- Add support for ROCm
