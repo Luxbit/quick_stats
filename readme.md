@@ -15,6 +15,37 @@
 cargo run --release
 ```
 
+## Dependencies
+
+The GPU TFLOPS benchmark requires `libtorch`
+
+### Installation
+
+1. Download `libtorch` from https://pytorch.org/get-started/locally/.
+2. Extract the library to a location of your choice
+3. Set the following environment variables
+
+##### Linux:
+
+```bash
+export LIBTORCH=/path/to/libtorch
+export LD_LIBRARY_PATH=${LIBTORCH}/lib:$LD_LIBRARY_PATH
+```
+
+##### Windows
+
+```powershell
+$Env:LIBTORCH = "X:\path\to\libtorch"
+$Env:Path += ";X:\path\to\libtorch\lib"
+```
+
+#### macOS + Homebrew
+
+```bash
+brew install pytorch jq
+export LIBTORCH=$(brew --cellar pytorch)/$(brew info --json pytorch | jq -r '.[0].installed[0].version')
+export LD_LIBRARY_PATH=${LIBTORCH}/lib:$LD_LIBRARY_PATH
+```
 
 ## CLI options
 
