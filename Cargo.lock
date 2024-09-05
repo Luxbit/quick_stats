@@ -1104,6 +1104,7 @@ dependencies = [
  "battery",
  "clap",
  "ndarray",
+ "rand",
  "reqwest",
  "serde",
  "serde_json",

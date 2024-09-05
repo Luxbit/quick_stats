@@ -6,9 +6,9 @@ use benchmark::{cpu::benchmark_cpu, gpu::benchmark_gpu};
 use clap::{Arg, Command};
 use info::cpu::get_cpu_info;
 use info::gpu::get_gpu_info;
-use info::network::{get_ping, get_public_ip};
+use info::network::{get_ping, get_public_ip, get_internet_speed};
 use info::power::{get_battery_info, BatteryInfo};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::fs::File;
 use std::io::{self, Write};
 use tch::Device;
@@ -27,6 +27,7 @@ fn main() -> io::Result<()> {
     let mut gpu_results = None;
     let mut ping = None;
     let mut public_ip = None;
+    let mut internet_speed = None;
 
     if features.contains(&&"cpu".to_string()) {
         let cpu_info_data = get_cpu_info();
@@ -57,6 +58,7 @@ fn main() -> io::Result<()> {
         let rt = Runtime::new()?;
         // Use the runtime to block on the async function
         public_ip = rt.block_on(get_public_ip()).ok();
+        internet_speed = rt.block_on(get_internet_speed()).ok();
     }
 
     let output = match output_format.as_str() {
@@ -68,6 +70,7 @@ fn main() -> io::Result<()> {
             gpu_results.as_ref(),
             ping,
             public_ip.as_ref(),
+            internet_speed.as_ref(),
         )?,
         _ => generate_plain_output(
             cpu_info.as_ref(),
@@ -77,6 +80,7 @@ fn main() -> io::Result<()> {
             gpu_results.as_ref(),
             ping,
             public_ip.as_ref(),
+            internet_speed.as_ref(),
         ),
     };
 
@@ -113,61 +117,79 @@ fn configure_cli() -> clap::ArgMatches {
         )
         .get_matches()
 }
-
 fn generate_json_output(
     cpu_info: Option<&info::cpu::CpuInfo>,
     cpu_gflops: Option<f64>,
     cpu_elapsed_time: Option<f64>,
     battery_info: Option<&BatteryInfo>,
-    gpu_results: Option<&Vec<serde_json::Value>>,
+    gpu_results: Option<&Vec<Value>>,
     ping: Option<u32>,
     public_ip: Option<&String>,
-) -> io::Result<String> {
-    let mut output_json = serde_json::Map::new();
+    internet_speed: Option<&(f64, f64)>,
+) -> Result<String, serde_json::Error> {
+    let mut output_json = json!({});
 
     if let Some(info) = cpu_info {
-        output_json.insert(
-            "cpu_info".to_string(),
-            json!({
-                "os": info.os,
-                "os_version": info.os_version.as_deref().unwrap_or("Not available"),
-                "total_memory_mb": info.total_memory,
-                "used_memory_mb": info.used_memory,
-                "total_swap_mb": info.total_swap,
-                "used_swap_mb": info.used_swap,
-                "arch": info.arch.as_deref().unwrap_or("Not available"),
-                "cpu_count": info.cpu_count,
-                "gflops": cpu_gflops.unwrap_or(0.0),
-                "benchmark_duration_seconds": cpu_elapsed_time.unwrap_or(0.0),
-            }),
-        );
+        // General information
+        output_json["general"] = json!({
+            "os": info.os,
+            "os_version": info.os_version.as_deref().unwrap_or("Not available"),
+        });
+
+        // Memory information
+        output_json["memory"] = json!({
+            "total_memory_mb": info.total_memory,
+            "used_memory_mb": info.used_memory,
+            "total_swap_mb": info.total_swap,
+            "used_swap_mb": info.used_swap,
+        });
+
+        // CPU-specific information
+        output_json["cpu"] = json!({
+            "arch": info.arch.as_deref().unwrap_or("Not available"),
+            "cpu_count": info.cpu_count,
+            "gflops": cpu_gflops.unwrap_or(0.0),
+            "benchmark_duration_seconds": cpu_elapsed_time.unwrap_or(0.0),
+        });
     }
 
     if let Some(gpu) = gpu_results {
-        output_json.insert("gpu_info".to_string(), json!(gpu));
+        output_json["gpu"] = json!(gpu);
     }
 
     if let Some(battery) = battery_info {
-        output_json.insert(
-            "battery_info".to_string(),
-            json!({
-                "has_battery": battery.has_battery,
-                "charge_percent": battery.charge_percent,
-                "is_charging": battery.is_charging,
-                "wh_capacity": battery.wh_capacity,
-            }),
-        );
+        output_json["battery"] = json!({
+            "has_battery": battery.has_battery,
+            "charge_percent": battery.charge_percent,
+            "is_charging": battery.is_charging,
+            "wh_capacity": battery.wh_capacity,
+        });
     }
 
-    if let Some(p) = ping {
-        output_json.insert("ping".to_string(), json!(p));
+    // Group network-related information
+    let mut network = json!({});
+
+    if let Some(ping_value) = ping {
+        network["ping_ms"] = json!(ping_value);
     }
 
     if let Some(ip) = public_ip {
-        output_json.insert("public_ip".to_string(), json!(ip));
+        network["public_ip"] = json!(ip);
     }
 
-    serde_json::to_string_pretty(&output_json).map_err(Into::into)
+    if let Some((download, upload)) = internet_speed {
+        network["speed"] = json!({
+            "download_mbps": download,
+            "upload_mbps": upload
+        });
+    }
+
+    // Only add the network if it's not empty
+    if !network.as_object().unwrap().is_empty() {
+        output_json["network"] = network;
+    }
+
+    serde_json::to_string_pretty(&output_json)
 }
 
 fn generate_plain_output(
@@ -178,14 +200,21 @@ fn generate_plain_output(
     gpu_results: Option<&Vec<serde_json::Value>>,
     ping: Option<u32>,
     public_ip: Option<&String>,
+    internet_speed: Option<&(f64, f64)>,
 ) -> String {
     let mut output = String::new();
 
     if let Some(info) = cpu_info {
+        output.push_str(&format_general_info(
+            info,
+        ));
         output.push_str(&format_cpu_info(
             info,
             cpu_gflops.unwrap_or(0.0),
             cpu_elapsed_time.unwrap_or(0.0),
+        ));
+        output.push_str(&format_memory_info(
+            info,
         ));
     }
 
@@ -211,10 +240,37 @@ fn generate_plain_output(
     }
 
     if let Some(ip) = public_ip {
-        output.push_str(&format!("Public IP: {}\n\n", ip));
+        output.push_str(&format!("Public IP: {}\n", ip));
     }
-
+    if let Some((download, upload)) = internet_speed {
+        output.push_str(&format!("Download speed: {:.2} Mbps (minimum)\n", download));
+        output.push_str(&format!("Upload speed: {:.2} Mbps (minimum)\n", upload));
+    }
     output
+}
+
+fn format_general_info(cpu_info: &info::cpu::CpuInfo) -> String {
+    format!(
+        "=> General:\n\
+        OS          : {:?}\n\
+        OS version  : {}\n\n",
+        cpu_info.os,
+        cpu_info.os_version.as_deref().unwrap_or("Not available")
+    )
+}
+
+fn format_memory_info(cpu_info: &info::cpu::CpuInfo) -> String {
+    format!(
+        "=> Memory:\n\
+        Total       : {} mb\n\
+        Used        : {} mb\n\
+        Swap Total  : {} mb\n\
+        Swap Used   : {} mb\n\n",
+        cpu_info.total_memory,
+        cpu_info.used_memory,
+        cpu_info.total_swap,
+        cpu_info.used_swap
+    )
 }
 
 fn format_cpu_info(
@@ -224,28 +280,17 @@ fn format_cpu_info(
 ) -> String {
     format!(
         "=> CPU:\n\
-        OS          : {:?}\n\
-        OS version  : {}\n\
-        Memory Total: {} mb\n\
-        Memory Used: {} mb\n\
-        Swap Total : {} mb\n\
-        Swap Used  : {} mb\n\
-        CPU architecture: {:?}\n\
-        CPU count   : {}\n\
-        CPU FLOPS   : {:.2} GFLOPS\n\
-        CPU benchmark duration: {:.2} seconds\n\n",
-        cpu_info.os,
-        cpu_info.os_version.as_deref().unwrap_or("Not available"),
-        cpu_info.total_memory,
-        cpu_info.used_memory,
-        cpu_info.total_swap,
-        cpu_info.used_swap,
+        Architecture: {:?}\n\
+        Count       : {}\n\
+        FLOPS       : {:.2} GFLOPS\n\
+        Benchmark duration: {:.2} seconds\n\n",
         cpu_info.arch.as_deref().unwrap_or("Not available"),
         cpu_info.cpu_count,
         cpu_gflops,
         cpu_elapsed_time
     )
 }
+
 
 fn format_battery_info(battery_info: &BatteryInfo) -> String {
     let charge = if battery_info.charge_percent.is_some() {
