@@ -252,7 +252,7 @@ fn generate_plain_output(
 fn format_general_info(cpu_info: &info::cpu::CpuInfo) -> String {
     format!(
         "=> General:\n\
-        OS          : {:?}\n\
+        OS          : {}\n\
         OS version  : {}\n\n",
         cpu_info.os,
         cpu_info.os_version.as_deref().unwrap_or("Not available")
@@ -280,7 +280,7 @@ fn format_cpu_info(
 ) -> String {
     format!(
         "=> CPU:\n\
-        Architecture: {:?}\n\
+        Architecture: {}\n\
         Count       : {}\n\
         FLOPS       : {:.2} GFLOPS\n\
         Benchmark duration: {:.2} seconds\n\n",
