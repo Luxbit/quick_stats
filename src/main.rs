@@ -6,12 +6,13 @@ use benchmark::{cpu::benchmark_cpu, gpu::benchmark_gpu};
 use clap::{Arg, Command};
 use info::cpu::get_cpu_info;
 use info::gpu::get_gpu_info;
+use info::network::{get_ping, get_public_ip};
 use info::power::{get_battery_info, BatteryInfo};
 use serde_json::json;
 use std::fs::File;
 use std::io::{self, Write};
 use tch::Device;
-
+use tokio::runtime::Runtime;
 
 fn main() -> io::Result<()> {
     let matches = configure_cli();
@@ -24,6 +25,8 @@ fn main() -> io::Result<()> {
     let mut cpu_elapsed_time = None;
     let mut battery_info = None;
     let mut gpu_results = None;
+    let mut ping = None;
+    let mut public_ip = None;
 
     if features.contains(&&"cpu".to_string()) {
         let cpu_info_data = get_cpu_info();
@@ -48,6 +51,14 @@ fn main() -> io::Result<()> {
         battery_info = Some(get_battery_info());
     }
 
+    if features.contains(&&"network".to_string()) {
+        ping = get_ping().ok();
+        // Create a new Tokio runtime
+        let rt = Runtime::new()?;
+        // Use the runtime to block on the async function
+        public_ip = rt.block_on(get_public_ip()).ok();
+    }
+
     let output = match output_format.as_str() {
         "json" => generate_json_output(
             cpu_info.as_ref(),
@@ -55,6 +66,8 @@ fn main() -> io::Result<()> {
             cpu_elapsed_time,
             battery_info.as_ref(),
             gpu_results.as_ref(),
+            ping,
+            public_ip.as_ref(),
         )?,
         _ => generate_plain_output(
             cpu_info.as_ref(),
@@ -62,12 +75,13 @@ fn main() -> io::Result<()> {
             cpu_elapsed_time,
             battery_info.as_ref(),
             gpu_results.as_ref(),
+            ping,
+            public_ip.as_ref(),
         ),
     };
 
     write_output(output_file, &output)
 }
-
 
 fn configure_cli() -> clap::ArgMatches {
     Command::new("System Benchmark")
@@ -93,8 +107,8 @@ fn configure_cli() -> clap::ArgMatches {
                 .short('e')
                 .long("features")
                 .value_name("FEATURE")
-                .help("Select which benchmarks/features to run/enable: cpu, gpu, battery (comma-separated)")
-                .default_value("cpu,gpu,battery")
+                .help("Select which benchmarks/features to run/enable: cpu, gpu, battery, network (comma-separated)")
+                .default_value("cpu,gpu,battery,network")
                 .use_value_delimiter(true),
         )
         .get_matches()
@@ -106,6 +120,8 @@ fn generate_json_output(
     cpu_elapsed_time: Option<f64>,
     battery_info: Option<&BatteryInfo>,
     gpu_results: Option<&Vec<serde_json::Value>>,
+    ping: Option<u32>,
+    public_ip: Option<&String>,
 ) -> io::Result<String> {
     let mut output_json = serde_json::Map::new();
 
@@ -143,6 +159,14 @@ fn generate_json_output(
         );
     }
 
+    if let Some(p) = ping {
+        output_json.insert("ping".to_string(), json!(p));
+    }
+
+    if let Some(ip) = public_ip {
+        output_json.insert("public_ip".to_string(), json!(ip));
+    }
+
     serde_json::to_string_pretty(&output_json).map_err(Into::into)
 }
 
@@ -152,15 +176,24 @@ fn generate_plain_output(
     cpu_elapsed_time: Option<f64>,
     battery_info: Option<&BatteryInfo>,
     gpu_results: Option<&Vec<serde_json::Value>>,
+    ping: Option<u32>,
+    public_ip: Option<&String>,
 ) -> String {
     let mut output = String::new();
 
     if let Some(info) = cpu_info {
-        output.push_str(&format_cpu_info(info, cpu_gflops.unwrap_or(0.0), cpu_elapsed_time.unwrap_or(0.0)));
+        output.push_str(&format_cpu_info(
+            info,
+            cpu_gflops.unwrap_or(0.0),
+            cpu_elapsed_time.unwrap_or(0.0),
+        ));
     }
 
     if let Some(gpu) = gpu_results {
-        if let Some(supports_mps) = cpu_info.as_ref().map(|info| info.arch == Some("arm64".to_string()) && info.os == "macos") {
+        if let Some(supports_mps) = cpu_info
+            .as_ref()
+            .map(|info| info.arch == Some("arm64".to_string()) && info.os == "macos")
+        {
             if supports_mps {
                 output.push_str(&format_mps_gpu_info());
             } else {
@@ -173,9 +206,16 @@ fn generate_plain_output(
         output.push_str(&format_battery_info(battery));
     }
 
+    if let Some(p) = ping {
+        output.push_str(&format!("=> Network:\nInternet Ping: {:.2} ms\n", p));
+    }
+
+    if let Some(ip) = public_ip {
+        output.push_str(&format!("Public IP: {}\n\n", ip));
+    }
+
     output
 }
-
 
 fn format_cpu_info(
     cpu_info: &info::cpu::CpuInfo,
@@ -225,7 +265,10 @@ fn format_battery_info(battery_info: &BatteryInfo) -> String {
         State of charge : {}\n\
         Charging        : {:?}\n\
         Capacity        : {}\n\n",
-        battery_info.has_battery, charge, battery_info.is_charging.unwrap_or(false), capacity
+        battery_info.has_battery,
+        charge,
+        battery_info.is_charging.unwrap_or(false),
+        capacity
     )
 }
 

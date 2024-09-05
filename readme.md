@@ -8,7 +8,7 @@
 - Benchmark GPU performance for floating-point operations per second (TFLOPS)
   - Support for CUDA GPUs and Metal Performance Shaders (MPS) for Apple Silicon
 - Check if device has a battery and returns state of charge, charging state and capacity
-
+- Check internet ping and public IP
 ## Usage
 
 ```bash  
@@ -59,6 +59,4 @@ export LD_LIBRARY_PATH=${LIBTORCH}/lib:$LD_LIBRARY_PATH
 
 - Add networking
   - speed
-  - ping
-  - ip
 - Add support for ROCm
