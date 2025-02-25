@@ -15,7 +15,6 @@ pub fn get_gpu_info() -> Vec<GpuInfo> {
     let mut gpu_info_list = Vec::new();
 
     if device_count == 0 {
-        println!("No CUDA devices found.");
         return gpu_info_list;
     }
 
