@@ -1,4 +1,4 @@
-use sysinfo::{System};
+use sysinfo::System;
 use crate::helpers::bytes_to_megabytes;
 
 #[derive(Debug)]
