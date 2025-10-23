@@ -1,33 +1,25 @@
-use std::process::Command;
 use std::error::Error;
 use reqwest::Client;
 use tokio::time::{Duration, Instant};
-use rand::Rng;
+use surge_ping::{Config, Client as PingClient, PingIdentifier, PingSequence};
+use std::net::IpAddr;
 
-pub fn get_ping() -> Result<u32, String> {
-    let address = "8.8.8.8"; // Google's DNS server
-    let start = Instant::now();
+pub async fn get_ping() -> Result<u32, String> {
+    let address: IpAddr = "8.8.8.8".parse()
+        .map_err(|e| format!("Invalid IP address: {}", e))?;
 
-    let output = if cfg!(target_os = "windows") {
-        Command::new("ping")
-            .args(&["-n", "1", "-w", "5000", address])
-            .output()
-    } else {
-        Command::new("ping")
-            .args(&["-c", "1", "-W", "5", address])
-            .output()
-    };
+    let config = Config::default();
+    let client = PingClient::new(&config)
+        .map_err(|e| format!("Failed to create ping client: {}", e))?;
 
-    match output {
-        Ok(output) => {
-            if output.status.success() {
-                let duration = start.elapsed();
-                Ok(duration.as_millis() as u32)
-            } else {
-                Err(format!("Ping failed: {}", String::from_utf8_lossy(&output.stderr)))
-            }
-        }
-        Err(e) => Err(format!("Failed to execute ping: {}", e)),
+    let payload = [0; 56]; // Standard ping payload size
+    let ident = PingIdentifier(rand::random());
+
+    let mut pinger = client.pinger(address, ident).await;
+
+    match pinger.ping(PingSequence(0), &payload).await {
+        Ok((_, duration)) => Ok(duration.as_millis() as u32),
+        Err(e) => Err(format!("Ping failed: {}", e)),
     }
 }
 

@@ -63,10 +63,10 @@ fn main() -> io::Result<()> {
     }
 
     if features.contains(&&"network".to_string()) {
-        ping = get_ping().ok();
         // Create a new Tokio runtime
         let rt = Runtime::new()?;
-        // Use the runtime to block on the async function
+        // Use the runtime to block on the async functions
+        ping = rt.block_on(get_ping()).ok();
         public_ip = rt.block_on(get_public_ip()).ok();
         if !no_bandwidth {
             internet_speed = rt.block_on(get_internet_speed()).ok();

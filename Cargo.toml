@@ -16,6 +16,7 @@ battery = "0.7.8"
 reqwest = "0.12.7"
 tokio = { version = "1.0", features = ["rt-multi-thread"] }
 rand = "0.8.5"
+surge-ping = "0.8"
 
 
 # Target-specific settings
