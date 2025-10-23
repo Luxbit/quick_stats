@@ -33,6 +33,7 @@ OPTIONS:
     -e, --features <FEATURE>        Select which benchmarks/features to run [default: cpu,gpu,battery,network]
                                      Possible values: cpu, gpu, battery, network (comma-separated)
         --no-benchmark              Skip CPU and GPU benchmarks, only collect device information
+        --no-bandwidth              Skip internet speed measurement
     -h, --help                      Print help information
     -V, --version                   Print version information
 ```
@@ -67,6 +68,11 @@ cargo run --release -- --no-benchmark
 **Get only GPU device info without benchmarks:**
 ```bash
 cargo run --release -- --features gpu --no-benchmark --format json
+```
+
+**Get network info without bandwidth measurement (faster):**
+```bash
+cargo run --release -- --features network --no-bandwidth
 ```
 
 ### Feature Details

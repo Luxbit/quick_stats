@@ -20,6 +20,7 @@ fn main() -> io::Result<()> {
     let output_file = matches.get_one::<String>("outputFile");
     let features: Vec<&String> = matches.get_many::<String>("features").unwrap().collect();
     let no_benchmark = matches.get_flag("no-benchmark");
+    let no_bandwidth = matches.get_flag("no-bandwidth");
 
     let mut cpu_info = None;
     let mut cpu_gflops = None;
@@ -67,7 +68,9 @@ fn main() -> io::Result<()> {
         let rt = Runtime::new()?;
         // Use the runtime to block on the async function
         public_ip = rt.block_on(get_public_ip()).ok();
-        internet_speed = rt.block_on(get_internet_speed()).ok();
+        if !no_bandwidth {
+            internet_speed = rt.block_on(get_internet_speed()).ok();
+        }
     }
 
     let output = match output_format.as_str() {
@@ -128,6 +131,12 @@ fn configure_cli() -> clap::ArgMatches {
             Arg::new("no-benchmark")
                 .long("no-benchmark")
                 .help("Skip CPU and GPU benchmarks, only collect device information")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("no-bandwidth")
+                .long("no-bandwidth")
+                .help("Skip internet speed measurement")
                 .action(clap::ArgAction::SetTrue),
         )
         .get_matches()
@@ -191,6 +200,9 @@ fn generate_json_output(
 
     // Group network-related information
     let mut network = json!({});
+
+    // Add online status based on ping success
+    network["online"] = json!(ping.is_some());
 
     if let Some(ping_value) = ping {
         network["ping_ms"] = json!(ping_value);
@@ -258,16 +270,23 @@ fn generate_plain_output(
         output.push_str(&format_battery_info(battery));
     }
 
-    if let Some(p) = ping {
-        output.push_str(&format!("=> Network:\nInternet Ping: {:.2} ms\n", p));
-    }
+    // Add network section if any network feature was checked
+    if ping.is_some() || public_ip.is_some() || internet_speed.is_some() {
+        output.push_str("=> Network:\n");
+        output.push_str(&format!("Online: {}\n", ping.is_some()));
 
-    if let Some(ip) = public_ip {
-        output.push_str(&format!("Public IP: {}\n", ip));
-    }
-    if let Some((download, upload)) = internet_speed {
-        output.push_str(&format!("Download speed: {:.2} Mbps (minimum)\n", download));
-        output.push_str(&format!("Upload speed: {:.2} Mbps (minimum)\n", upload));
+        if let Some(p) = ping {
+            output.push_str(&format!("Internet Ping: {:.2} ms\n", p));
+        }
+
+        if let Some(ip) = public_ip {
+            output.push_str(&format!("Public IP: {}\n", ip));
+        }
+
+        if let Some((download, upload)) = internet_speed {
+            output.push_str(&format!("Download speed: {:.2} Mbps (minimum)\n", download));
+            output.push_str(&format!("Upload speed: {:.2} Mbps (minimum)\n", upload));
+        }
     }
     output
 }
