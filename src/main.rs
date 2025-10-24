@@ -196,6 +196,7 @@ fn generate_json_output(
             "has_battery": battery.has_battery,
             "charge_percent": battery.charge_percent,
             "is_charging": battery.is_charging,
+            "on_ac_power": battery.on_ac_power,
             "wh_capacity": battery.wh_capacity,
         });
     }
@@ -355,10 +356,12 @@ fn format_battery_info(battery_info: &BatteryInfo) -> String {
         Battery         : {:?}\n\
         State of charge : {}\n\
         Charging        : {:?}\n\
+        On AC power     : {:?}\n\
         Capacity        : {}\n\n",
         battery_info.has_battery,
         charge,
         battery_info.is_charging.unwrap_or(false),
+        battery_info.on_ac_power.unwrap_or(false),
         capacity
     )
 }
