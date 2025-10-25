@@ -417,7 +417,7 @@ fn get_cuda_gpus_info(no_benchmark: bool) -> io::Result<Vec<serde_json::Value>> 
             "total_memory_mb": info.total_memory.unwrap_or(0),
             "free_memory_mb": info.free_memory.unwrap_or(0),
             "used_memory_mb": info.used_memory.unwrap_or(0),
-            "cuda_version": info.cuda_version.unwrap_or_else(|| "Not available".to_string()),
+            "compute_capability": info.compute_capability.unwrap_or_else(|| "Not available".to_string()),
             "driver_version": info.driver_version.unwrap_or_else(|| "Not available".to_string()),
         });
 
@@ -506,8 +506,8 @@ fn format_cuda_gpus_plain(gpu_data: &Vec<serde_json::Value>) -> String {
             .unwrap_or(0);
         let free_memory = gpu.get("free_memory_mb").and_then(|v| v.as_u64()).unwrap_or(0);
         let used_memory = gpu.get("used_memory_mb").and_then(|v| v.as_u64()).unwrap_or(0);
-        let cuda_version = gpu
-            .get("cuda_version")
+        let compute_capability = gpu
+            .get("compute_capability")
             .and_then(|v| v.as_str())
             .unwrap_or("Not available");
         let driver_version = gpu
@@ -522,9 +522,9 @@ fn format_cuda_gpus_plain(gpu_data: &Vec<serde_json::Value>) -> String {
             Total Memory: {} MB\n\
             Free Memory: {} MB\n\
             Used Memory: {} MB\n\
-            CUDA Version: {}\n\
+            Compute Capability: {}\n\
             Driver Version: {}\n",
-            device_id, device, name, total_memory, free_memory, used_memory, cuda_version, driver_version
+            device_id, device, name, total_memory, free_memory, used_memory, compute_capability, driver_version
         ));
 
         if let Some(tflops) = gpu.get("tflops") {

@@ -12,12 +12,73 @@ pub struct GpuInfo {
     pub free_memory: Option<u64>,
     pub used_memory: Option<u64>,
     // CUDA-specific fields
-    pub cuda_version: Option<String>,
+    pub compute_capability: Option<String>,
     pub driver_version: Option<String>,
     // MPS-specific fields
     pub metal_support: Option<String>,
     pub core_count: Option<u32>,
     pub vendor: Option<String>,
+}
+
+fn get_nvidia_versions() -> (Option<String>, Option<String>) {
+    let output = Command::new("nvidia-smi")
+        .args(&["--version"])
+        .output();
+
+    if let Ok(output) = output {
+        if output.status.success() {
+            if let Ok(result) = String::from_utf8(output.stdout) {
+                let mut cuda_version = None;
+                let mut driver_version = None;
+
+                for line in result.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("CUDA Version") {
+                        cuda_version = trimmed
+                            .split(':')
+                            .nth(1)
+                            .map(|s| s.trim().to_string());
+                    } else if trimmed.starts_with("DRIVER version") {
+                        driver_version = trimmed
+                            .split(':')
+                            .nth(1)
+                            .map(|s| s.trim().to_string());
+                    }
+                }
+
+                return (cuda_version, driver_version);
+            }
+        }
+    }
+
+    (None, None)
+}
+
+fn get_nvidia_gpu_name(device_id: usize) -> Option<String> {
+    let output = Command::new("nvidia-smi")
+        .args(&["-L"])
+        .output();
+
+    if let Ok(output) = output {
+        if output.status.success() {
+            if let Ok(result) = String::from_utf8(output.stdout) {
+                // Parse output like: "GPU 0: NVIDIA GeForce RTX 3090 (UUID: GPU-41f4e6bf-cee3-8098-d932-3a932203fa0c)"
+                for line in result.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with(&format!("GPU {}", device_id)) {
+                        // Extract name between "GPU X: " and " (UUID:"
+                        if let Some(after_colon) = trimmed.split(':').nth(1) {
+                            if let Some(name_part) = after_colon.split("(UUID:").next() {
+                                return Some(name_part.trim().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 fn query_nvidia_gpu(
@@ -33,33 +94,49 @@ fn query_nvidia_gpu(
     Option<u32>,
     Option<String>,
 ) {
+    // Get GPU name
+    let name = get_nvidia_gpu_name(device_id);
+
+    // Get GPU memory and compute capability
     let output = Command::new("nvidia-smi")
         .args(&[
-            "--query-gpu=name,memory.total,memory.free,memory.used,cuda_version,driver_version",
+            "--query-gpu=memory.total,memory.free,memory.used,compute_cap",
             "--format=csv,noheader,nounits",
             &format!("--id={}", device_id),
         ])
         .output();
 
+    let mut total = None;
+    let mut free = None;
+    let mut used = None;
+    let mut compute_cap = None;
+
     if let Ok(output) = output {
         if output.status.success() {
             if let Ok(result) = String::from_utf8(output.stdout) {
                 let parts: Vec<&str> = result.trim().split(',').collect();
-                if parts.len() == 6 {
-                    let name = Some(parts[0].trim().to_string());
-                    let total = parts[1].trim().parse::<u64>().ok();
-                    let free = parts[2].trim().parse::<u64>().ok();
-                    let used = parts[3].trim().parse::<u64>().ok();
-                    let cuda_version = Some(parts[4].trim().to_string());
-                    let driver_version = Some(parts[5].trim().to_string());
-                    // CUDA: return name, total, free, used, cuda_version, driver_version, None for MPS fields
-                    return (name, total, free, used, cuda_version, driver_version, None, None, None);
+                if parts.len() == 4 {
+                    total = parts[0].trim().parse::<u64>().ok();
+                    free = parts[1].trim().parse::<u64>().ok();
+                    used = parts[2].trim().parse::<u64>().ok();
+                    compute_cap = Some(parts[3].trim().to_string());
                 }
             }
         }
     }
 
-    (None, None, None, None, None, None, None, None, None)
+    // Get CUDA and driver versions (same for all GPUs)
+    let (cuda_version, driver_version) = get_nvidia_versions();
+
+    // Combine compute_cap and cuda_version into compute_capability field
+    let compute_capability = match (compute_cap, cuda_version) {
+        (Some(cap), Some(cuda)) => Some(format!("{} (CUDA {})", cap, cuda)),
+        (Some(cap), None) => Some(cap),
+        (None, Some(cuda)) => Some(format!("CUDA {}", cuda)),
+        (None, None) => None,
+    };
+
+    (name, total, free, used, compute_capability, driver_version, None, None, None)
 }
 
 fn query_mps_gpu() -> (
@@ -118,7 +195,7 @@ fn query_mps_gpu() -> (
         total_memory,
         None, // free_memory - not used for MPS
         used_memory,
-        None, // cuda_version - not applicable for MPS
+        None, // compute_capability - not applicable for MPS
         None, // driver_version - not applicable for MPS
         metal_support,
         core_count,
@@ -138,7 +215,7 @@ pub fn get_gpu_info() -> Vec<GpuInfo> {
             total_memory,
             free_memory,
             used_memory,
-            cuda_version,
+            compute_capability,
             driver_version,
             metal_support,
             core_count,
@@ -152,7 +229,7 @@ pub fn get_gpu_info() -> Vec<GpuInfo> {
             total_memory,
             free_memory,
             used_memory,
-            cuda_version,
+            compute_capability,
             driver_version,
             metal_support,
             core_count,
@@ -170,7 +247,7 @@ pub fn get_gpu_info() -> Vec<GpuInfo> {
             total_memory,
             free_memory,
             used_memory,
-            cuda_version,
+            compute_capability,
             driver_version,
             metal_support,
             core_count,
@@ -186,7 +263,7 @@ pub fn get_gpu_info() -> Vec<GpuInfo> {
                 total_memory,
                 free_memory,
                 used_memory,
-                cuda_version,
+                compute_capability,
                 driver_version,
                 metal_support,
                 core_count,
