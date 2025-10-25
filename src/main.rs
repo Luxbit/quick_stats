@@ -174,6 +174,9 @@ fn generate_json_output(
         let mut cpu_json = json!({
             "arch": info.arch.as_deref().unwrap_or("Not available"),
             "cpu_count": info.cpu_count,
+            "vendor_id": info.vendor_id.as_deref().unwrap_or("Not available"),
+            "brand": info.brand.as_deref().unwrap_or("Not available"),
+            "frequency_mhz": info.frequency.unwrap_or(0),
         });
 
         if let Some(gflops) = cpu_gflops {
@@ -318,9 +321,15 @@ fn format_cpu_info(
 ) -> String {
     let mut output = format!(
         "=> CPU:\n\
+        Vendor      : {}\n\
+        Brand       : {}\n\
         Architecture: {}\n\
+        Frequency   : {} MHz\n\
         Count       : {}\n",
+        cpu_info.vendor_id.as_deref().unwrap_or("Not available"),
+        cpu_info.brand.as_deref().unwrap_or("Not available"),
         cpu_info.arch.as_deref().unwrap_or("Not available"),
+        cpu_info.frequency.unwrap_or(0),
         cpu_info.cpu_count,
     );
 
@@ -367,17 +376,33 @@ fn format_battery_info(battery_info: &BatteryInfo) -> String {
 }
 
 fn get_mps_gpu_info(no_benchmark: bool) -> io::Result<Vec<serde_json::Value>> {
-    let mut result = json!({
-        "device": "MPS",
-    });
+    let gpu_infos = get_gpu_info();
+    let mut gpu_results = Vec::new();
 
-    if !no_benchmark {
-        let (gpu_tflops, gpu_elapsed_time) = benchmark_gpu(Device::Mps, 1000);
-        result["tflops"] = json!(gpu_tflops);
-        result["duration"] = json!(gpu_elapsed_time);
+    for info in gpu_infos.into_iter() {
+        // Only process MPS devices
+        if matches!(info.device, Device::Mps) {
+            let mut gpu_json = json!({
+                "device": "MPS",
+                "name": info.name.unwrap_or_else(|| "Not available".to_string()),
+                "total_memory_mb": info.total_memory.unwrap_or(0),
+                "used_memory_mb": info.used_memory.unwrap_or(0),
+                "metal_support": info.metal_support.unwrap_or_else(|| "Not available".to_string()),
+                "core_count": info.core_count.unwrap_or(0),
+                "vendor": info.vendor.unwrap_or_else(|| "Not available".to_string()),
+            });
+
+            if !no_benchmark {
+                let (gpu_tflops, gpu_elapsed_time) = benchmark_gpu(Device::Mps, 1000);
+                gpu_json["tflops"] = json!(gpu_tflops);
+                gpu_json["duration"] = json!(gpu_elapsed_time);
+            }
+
+            gpu_results.push(gpu_json);
+        }
     }
 
-    Ok(vec![result])
+    Ok(gpu_results)
 }
 
 fn get_cuda_gpus_info(no_benchmark: bool) -> io::Result<Vec<serde_json::Value>> {
@@ -389,9 +414,11 @@ fn get_cuda_gpus_info(no_benchmark: bool) -> io::Result<Vec<serde_json::Value>> 
             "device_id": info.device_id,
             "device": format!("{:?}", info.device),
             "name": info.name.unwrap_or_else(|| "Not available".to_string()),
-            "total_memory": info.total_memory.unwrap_or(0),
-            "free_memory": info.free_memory.unwrap_or(0),
-            "used_memory": info.used_memory.unwrap_or(0),
+            "total_memory_mb": info.total_memory.unwrap_or(0),
+            "free_memory_mb": info.free_memory.unwrap_or(0),
+            "used_memory_mb": info.used_memory.unwrap_or(0),
+            "cuda_version": info.cuda_version.unwrap_or_else(|| "Not available".to_string()),
+            "driver_version": info.driver_version.unwrap_or_else(|| "Not available".to_string()),
         });
 
         if !no_benchmark {
@@ -407,18 +434,50 @@ fn get_cuda_gpus_info(no_benchmark: bool) -> io::Result<Vec<serde_json::Value>> 
 }
 
 fn format_mps_gpu_plain(gpu_data: &Vec<serde_json::Value>) -> String {
-    let mut output = String::from("=> GPU:\nGPU: integrated (MPS)\n");
+    let mut output = String::from("=> GPU:\n");
 
     if let Some(gpu) = gpu_data.first() {
+        let name = gpu
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Not available");
+        let vendor = gpu
+            .get("vendor")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Not available");
+        let metal_support = gpu
+            .get("metal_support")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Not available");
+        let core_count = gpu.get("core_count").and_then(|v| v.as_u64()).unwrap_or(0);
+        let total_memory = gpu
+            .get("total_memory_mb")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let used_memory = gpu
+            .get("used_memory_mb")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        output.push_str(&format!(
+            "        Name                : {}\n\
+             Vendor              : {}\n\
+             Metal Support       : {}\n\
+             Core Count          : {}\n\
+             Unified Memory Total: {} MB\n\
+             Unified Memory Used : {} MB\n",
+            name, vendor, metal_support, core_count, total_memory, used_memory
+        ));
+
         if let Some(tflops) = gpu.get("tflops") {
             output.push_str(&format!(
-                "        GPU FLOPS: {:.2} TFLOPS\n",
+                "        GPU FLOPS           : {:.2} TFLOPS\n",
                 tflops.as_f64().unwrap_or(0.0)
             ));
         }
         if let Some(duration) = gpu.get("duration") {
             output.push_str(&format!(
-                "        GPU benchmark duration: {:.2} seconds\n",
+                "        Benchmark Duration  : {:.2} seconds\n",
                 duration.as_f64().unwrap_or(0.0)
             ));
         }
@@ -442,20 +501,30 @@ fn format_cuda_gpus_plain(gpu_data: &Vec<serde_json::Value>) -> String {
             .and_then(|v| v.as_str())
             .unwrap_or("Not available");
         let total_memory = gpu
-            .get("total_memory")
+            .get("total_memory_mb")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-        let free_memory = gpu.get("free_memory").and_then(|v| v.as_u64()).unwrap_or(0);
-        let used_memory = gpu.get("used_memory").and_then(|v| v.as_u64()).unwrap_or(0);
+        let free_memory = gpu.get("free_memory_mb").and_then(|v| v.as_u64()).unwrap_or(0);
+        let used_memory = gpu.get("used_memory_mb").and_then(|v| v.as_u64()).unwrap_or(0);
+        let cuda_version = gpu
+            .get("cuda_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Not available");
+        let driver_version = gpu
+            .get("driver_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Not available");
 
         output.push_str(&format!(
             "CUDA Device {} Information:\n\
             Device: {}\n\
             Name: {}\n\
-            Total Memory: {}\n\
-            Free Memory: {}\n\
-            Used Memory: {}\n",
-            device_id, device, name, total_memory, free_memory, used_memory
+            Total Memory: {} MB\n\
+            Free Memory: {} MB\n\
+            Used Memory: {} MB\n\
+            CUDA Version: {}\n\
+            Driver Version: {}\n",
+            device_id, device, name, total_memory, free_memory, used_memory, cuda_version, driver_version
         ));
 
         if let Some(tflops) = gpu.get("tflops") {
