@@ -489,7 +489,7 @@ fn format_mps_gpu_plain(gpu_data: &Vec<serde_json::Value>) -> String {
 }
 
 fn format_cuda_gpus_plain(gpu_data: &Vec<serde_json::Value>) -> String {
-    let mut output = String::new();
+    let mut output = String::from("=> GPU:\n");
 
     for gpu in gpu_data {
         let device_id = gpu.get("device_id").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -505,8 +505,14 @@ fn format_cuda_gpus_plain(gpu_data: &Vec<serde_json::Value>) -> String {
             .get("total_memory_mb")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-        let free_memory = gpu.get("free_memory_mb").and_then(|v| v.as_u64()).unwrap_or(0);
-        let used_memory = gpu.get("used_memory_mb").and_then(|v| v.as_u64()).unwrap_or(0);
+        let free_memory = gpu
+            .get("free_memory_mb")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let used_memory = gpu
+            .get("used_memory_mb")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         let compute_capability = gpu
             .get("compute_capability")
             .and_then(|v| v.as_str())
@@ -530,19 +536,27 @@ fn format_cuda_gpus_plain(gpu_data: &Vec<serde_json::Value>) -> String {
             Compute Capability: {}\n\
             CUDA Version: {}\n\
             Driver Version: {}\n",
-            device_id, device, name, total_memory, free_memory, used_memory, compute_capability, cuda_version, driver_version
+            device_id,
+            device,
+            name,
+            total_memory,
+            free_memory,
+            used_memory,
+            compute_capability,
+            cuda_version,
+            driver_version
         ));
 
         if let Some(tflops) = gpu.get("tflops") {
             output.push_str(&format!(
-                "            GPU Estimated FLOPS: {:.2} TFLOPS\n",
+                "GPU Estimated FLOPS: {:.2} TFLOPS\n",
                 tflops.as_f64().unwrap_or(0.0)
             ));
         }
 
         if let Some(duration) = gpu.get("duration") {
             output.push_str(&format!(
-                "            GPU benchmark duration: {:.2} seconds\n",
+                "GPU benchmark duration: {:.2} seconds\n",
                 duration.as_f64().unwrap_or(0.0)
             ));
         }
