@@ -9,7 +9,6 @@ pub struct GpuInfo {
     pub device: Device,
     pub name: Option<String>,
     pub total_memory: Option<u64>,
-    pub free_memory: Option<u64>,
     pub used_memory: Option<u64>,
     // CUDA-specific fields
     pub compute_capability: Option<String>,
@@ -90,7 +89,6 @@ fn query_nvidia_gpu(
     Option<String>,
     Option<u64>,
     Option<u64>,
-    Option<u64>,
     Option<String>,
     Option<String>,
     Option<String>,
@@ -104,14 +102,13 @@ fn query_nvidia_gpu(
     // Get GPU memory and compute capability
     let output = Command::new("nvidia-smi")
         .args(&[
-            "--query-gpu=memory.total,memory.free,memory.used,compute_cap",
+            "--query-gpu=memory.total,memory.used,compute_cap",
             "--format=csv,noheader,nounits",
             &format!("--id={}", device_id),
         ])
         .output();
 
     let mut total = None;
-    let mut free = None;
     let mut used = None;
     let mut compute_capability = None;
 
@@ -119,11 +116,10 @@ fn query_nvidia_gpu(
         if output.status.success() {
             if let Ok(result) = String::from_utf8(output.stdout) {
                 let parts: Vec<&str> = result.trim().split(',').collect();
-                if parts.len() == 4 {
+                if parts.len() == 3 {
                     total = parts[0].trim().parse::<u64>().ok();
-                    free = parts[1].trim().parse::<u64>().ok();
-                    used = parts[2].trim().parse::<u64>().ok();
-                    compute_capability = Some(parts[3].trim().to_string());
+                    used = parts[1].trim().parse::<u64>().ok();
+                    compute_capability = Some(parts[2].trim().to_string());
                 }
             }
         }
@@ -132,12 +128,11 @@ fn query_nvidia_gpu(
     // Get CUDA and driver versions (same for all GPUs)
     let (cuda_version, driver_version) = get_nvidia_versions();
 
-    (name, total, free, used, compute_capability, cuda_version, driver_version, None, None, None)
+    (name, total, used, compute_capability, cuda_version, driver_version, None, None, None)
 }
 
 fn query_mps_gpu() -> (
     Option<String>,
-    Option<u64>,
     Option<u64>,
     Option<u64>,
     Option<String>,
@@ -190,7 +185,6 @@ fn query_mps_gpu() -> (
     (
         name,
         total_memory,
-        None, // free_memory - not used for MPS
         used_memory,
         None, // compute_capability - not applicable for MPS
         None, // cuda_version - not applicable for MPS
@@ -211,7 +205,6 @@ pub fn get_gpu_info() -> Vec<GpuInfo> {
         let (
             name,
             total_memory,
-            free_memory,
             used_memory,
             compute_capability,
             cuda_version,
@@ -226,7 +219,6 @@ pub fn get_gpu_info() -> Vec<GpuInfo> {
             device,
             name,
             total_memory,
-            free_memory,
             used_memory,
             compute_capability,
             cuda_version,
@@ -245,7 +237,6 @@ pub fn get_gpu_info() -> Vec<GpuInfo> {
         let (
             name,
             total_memory,
-            free_memory,
             used_memory,
             compute_capability,
             cuda_version,
@@ -262,7 +253,6 @@ pub fn get_gpu_info() -> Vec<GpuInfo> {
                 device: Device::Mps,
                 name,
                 total_memory,
-                free_memory,
                 used_memory,
                 compute_capability,
                 cuda_version,
