@@ -8,6 +8,7 @@ use info::cpu::get_cpu_info;
 use info::gpu::get_gpu_info;
 use info::network::{get_internet_speed, get_ping, get_public_ip};
 use info::power::{get_battery_info, BatteryInfo};
+use info::drives::get_drives_info;
 use serde_json::{json, Value};
 use std::fs::File;
 use std::io::{self, Write};
@@ -30,6 +31,7 @@ fn main() -> io::Result<()> {
     let mut ping = None;
     let mut public_ip = None;
     let mut internet_speed = None;
+    let mut drives_info = None;
 
     if features.contains(&&"cpu".to_string()) {
         let cpu_info_data = get_cpu_info();
@@ -75,6 +77,10 @@ fn main() -> io::Result<()> {
         }
     }
 
+    if features.contains(&&"drives".to_string()) {
+        drives_info = Some(get_drives_info());
+    }
+
     let output = match output_format.as_str() {
         "json" => generate_json_output(
             cpu_info.as_ref(),
@@ -85,6 +91,7 @@ fn main() -> io::Result<()> {
             ping,
             public_ip.as_ref(),
             internet_speed.as_ref(),
+            drives_info.as_ref(),
         )?,
         _ => generate_plain_output(
             cpu_info.as_ref(),
@@ -95,6 +102,7 @@ fn main() -> io::Result<()> {
             ping,
             public_ip.as_ref(),
             internet_speed.as_ref(),
+            drives_info.as_ref(),
         ),
     };
 
@@ -125,8 +133,8 @@ fn configure_cli() -> clap::ArgMatches {
                 .short('e')
                 .long("features")
                 .value_name("FEATURE")
-                .help("Select which benchmarks/features to run/enable: cpu, gpu, battery, network (comma-separated)")
-                .default_value("cpu,gpu,battery,network")
+                .help("Select which benchmarks/features to run/enable: cpu, gpu, battery, network, drives (comma-separated)")
+                .default_value("cpu,gpu,battery,network,drives")
                 .use_value_delimiter(true),
         )
         .arg(
@@ -152,6 +160,7 @@ fn generate_json_output(
     ping: Option<u32>,
     public_ip: Option<&String>,
     internet_speed: Option<&(f64, f64)>,
+    drives_info: Option<&Vec<info::drives::DriveInfo>>,
 ) -> Result<String, serde_json::Error> {
     let mut output_json = json!({});
 
@@ -230,6 +239,24 @@ fn generate_json_output(
         output_json["network"] = network;
     }
 
+    if let Some(drives) = drives_info {
+        let drives_json: Vec<Value> = drives
+            .iter()
+            .map(|drive| {
+                json!({
+                    "name": drive.name,
+                    "mount_point": drive.mount_point,
+                    "total_space_mb": drive.total_space_mb,
+                    "available_space_mb": drive.available_space_mb,
+                    "used_space_mb": drive.total_space_mb - drive.available_space_mb,
+                    "file_system": drive.file_system,
+                    "is_removable": drive.is_removable,
+                })
+            })
+            .collect();
+        output_json["drives"] = json!(drives_json);
+    }
+
     serde_json::to_string_pretty(&output_json)
 }
 
@@ -242,6 +269,7 @@ fn generate_plain_output(
     ping: Option<u32>,
     public_ip: Option<&String>,
     internet_speed: Option<&(f64, f64)>,
+    drives_info: Option<&Vec<info::drives::DriveInfo>>,
 ) -> String {
     let mut output = String::new();
 
@@ -290,6 +318,11 @@ fn generate_plain_output(
             output.push_str(&format!("Upload speed: {:.2} Mbps (minimum)\n", upload));
         }
     }
+
+    if let Some(drives) = drives_info {
+        output.push_str(&format_drives_info(drives));
+    }
+
     output
 }
 
@@ -557,6 +590,48 @@ fn format_cuda_gpus_plain(gpu_data: &Vec<serde_json::Value>) -> String {
 
     output
 }
+
+fn format_drives_info(drives: &Vec<info::drives::DriveInfo>) -> String {
+    let mut output = String::from("=> Drives:\n");
+
+    for (index, drive) in drives.iter().enumerate() {
+        let used_space_mb = drive.total_space_mb - drive.available_space_mb;
+        let usage_percent = if drive.total_space_mb > 0 {
+            (used_space_mb as f64 / drive.total_space_mb as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        if index > 0 {
+            output.push('\n');
+        }
+
+        output.push_str(&format!(
+            "Drive {}:\n\
+            Name            : {}\n\
+            Mount Point     : {}\n\
+            File System     : {}\n\
+            Total Space     : {} MB\n\
+            Used Space      : {} MB\n\
+            Available Space : {} MB\n\
+            Usage           : {:.1}%\n\
+            Removable       : {}\n",
+            index + 1,
+            drive.name,
+            drive.mount_point,
+            drive.file_system,
+            drive.total_space_mb,
+            used_space_mb,
+            drive.available_space_mb,
+            usage_percent,
+            drive.is_removable
+        ));
+    }
+
+    output.push('\n');
+    output
+}
+
 fn write_output(output_file: Option<&String>, output: &str) -> io::Result<()> {
     if let Some(file_path) = output_file {
         let mut file = File::create(file_path)?;
