@@ -21,7 +21,7 @@ pub fn get_drives_info() -> Vec<DriveInfo> {
             mount_point: disk.mount_point().to_string_lossy().to_string(),
             total_space_mb: bytes_to_megabytes(disk.total_space()),
             available_space_mb: bytes_to_megabytes(disk.available_space()),
-            file_system: String::from_utf8_lossy(disk.file_system()).to_string(),
+            file_system: disk.file_system().to_string_lossy().to_string(),
             is_removable: disk.is_removable(),
         });
     }
