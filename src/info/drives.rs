@@ -16,6 +16,11 @@ pub fn get_drives_info() -> Vec<DriveInfo> {
     let mut drives = Vec::new();
 
     for disk in disks.list() {
+        // Skip removable drives
+        if disk.is_removable() {
+            continue;
+        }
+
         drives.push(DriveInfo {
             name: disk.name().to_string_lossy().to_string(),
             mount_point: disk.mount_point().to_string_lossy().to_string(),
