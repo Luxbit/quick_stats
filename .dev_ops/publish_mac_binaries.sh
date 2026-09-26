@@ -61,7 +61,11 @@ for arch in arm64 x64; do
     exit 1
   fi
   echo "==> cargo build --release --target=$target (LIBTORCH=$libtorch)"
-  LIBTORCH="$libtorch" LIBTORCH_INCLUDE="$libtorch" LIBTORCH_LIB="$libtorch" \
+  # LIBTORCH_BYPASS_VERSION_CHECK: tch 0.15 hard-codes "expects PyTorch
+  # 2.2.0" and rejects 2.2.2; same-series patch release, identical CPU C++
+  # ABI — the bypass is the documented escape hatch for exactly this.
+  LIBTORCH="${libtorch}" LIBTORCH_INCLUDE="${libtorch}" LIBTORCH_LIB="${libtorch}" \
+    LIBTORCH_BYPASS_VERSION_CHECK=1 \
     cargo build --release --target="$target"
   cp "$TARGET_DIR/$target/release/quick_stats" "builds/quick_stats-${VERSION}-mac-${arch}"
   chmod +x "builds/quick_stats-${VERSION}-mac-${arch}"

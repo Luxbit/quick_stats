@@ -36,6 +36,13 @@ variables:
   # downloader pins 2.2.2 for every platform. This binary links against
   # 2.2.2 here and runs against the desktop's bundled 2.2.2 at runtime.
   LIBTORCH_VERSION: "2.2.2"
+  # tch 0.15 (torch-sys) hard-codes the expected libtorch version string
+  # 2.2.0 and refuses anything else ("this tch version expects PyTorch
+  # 2.2.0, got 2.2.2"). 2.2.2 is a same-series patch release with an
+  # identical CPU C++ ABI, and we build against the very trees the desktop
+  # bundles — so the documented bypass is safe here. Revisit if the tch
+  # major version ever changes.
+  LIBTORCH_BYPASS_VERSION_CHECK: "1"
 
 # Uploads every builds/quick_stats-* to this project's generic package
 # registry under the Cargo.toml version. The job token always has access
