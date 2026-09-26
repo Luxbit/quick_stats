@@ -43,6 +43,12 @@ variables:
   # bundles — so the documented bypass is safe here. Revisit if the tch
   # major version ever changes.
   LIBTORCH_BYPASS_VERSION_CHECK: "1"
+  # The official prebuilt libtorch for aarch64-linux ships ONLY as the
+  # PyPI manylinux wheel — download.pytorch.org has no aarch64 zips. A
+  # wheel is a plain zip of the standard torch/{lib,include} tree, and
+  # the aarch64 wheels of this era are CPU-only (no CUDA libs). URL
+  # pinned for reproducibility; bump together with LIBTORCH_VERSION.
+  TORCH_AARCH64_WHEEL_URL: "https://files.pythonhosted.org/packages/c3/7c/aeb0c5789a3f10cf909640530cd75b314959b9d9914a4996ed2c7bf8779d/torch-2.2.2-cp310-cp310-manylinux2014_aarch64.whl"
 
 # Uploads every builds/quick_stats-* to this project's generic package
 # registry under the Cargo.toml version. The job token always has access
@@ -108,74 +114,64 @@ linux-amd64:
 
 # Linux aarch64 — ON-DEMAND build + publish (not part of normal pushes).
 #
-# Why on demand: there is no prebuilt libtorch for aarch64-linux, so the
-# job compiles the same 2.2.2 CPU release the desktop bundles, from
-# source, before linking quick_stats. The Rust side would cross-compile
-# from x86_64 fine, but torch-sys's C++ side needs an aarch64-built
-# libtorch, which only an aarch64 machine can produce. So the job:
+# download.pytorch.org publishes no aarch64-linux libtorch zips, but the
+# official prebuilt DOES exist: the PyPI manylinux wheel (a plain zip of
+# torch/{lib,include} — CPU-only for this era). The job downloads and
+# unpacks that wheel, then links quick_stats against it. The Rust side
+# still needs an aarch64 environment for the final link, so the job:
 #   * only materializes when QUICK_STATS_AARCH64=true (set as a project
 #     CI/CD variable, or typed into a web pipeline run), and
 #   * therefore needs an aarch64 docker runner registered for this
 #     project (any ARM64 box — the current runners are x86_64).
-# First run builds libtorch from source (~30-60 min, cached afterwards);
-# then it links, publishes quick_stats-<ver>-linux-aarch64 like amd64,
-# and stays out of the way until asked again. Note the desktop currently
-# only packages x64 (linkmesh plan, open question 3) — this artifact is
-# for aarch64 hosts running LinkMesh manually or on the server.
-# NOTE: a `:` + space inside a plain YAML scalar parses the line as a
-# mapping and fails lint — leading-quote any script line containing one.
+# ABI note: unlike the +cpu zips used on x64 (cxx11 ABI), the manylinux
+# wheel is built pre-cxx11-ABI — hence LIBTORCH_CXX11_ABI=0 above. For
+# aarch64 this wheel is the only official prebuilt, so link-time and
+# runtime libtorch are always the same build (hosts run it with the
+# same wheel's libs, e.g. pip install torch==2.2.2, or the unpacked
+# torch-aarch64/torch{,.libs} tree). The torch-sys version check never
+# fires here: the wheel has no build-version marker file (and the
+# global bypass is set anyway). If the link ever complains about
+# transitive deps (libgomp etc. live in the wheel's torch.libs/), add
+# -L torch-aarch64/torch.libs via RUSTFLAGS.
+# The desktop packages x64 linux only (linkmesh plan, open question 3);
+# this artifact is for aarch64 hosts running LinkMesh manually/server-
+# side. NOTE: a `:` + space inside a plain YAML scalar parses the line
+# as a mapping and fails lint — leading-quote any script line with one.
 linux-aarch64:
   stage: build
   image: rust:latest
+  variables:
+    # The manylinux wheel is a PRE-cxx11-ABI build (unlike the +cpu zips
+    # used on x64). torch-sys compiles its C++ shim with
+    # -D_GLIBCXX_USE_CXX11_ABI taken from this variable and defaults it
+    # to 1 — wrong here: the link would fail on mangled-symbol
+    # mismatches against the ABI=0 wheel libraries.
+    LIBTORCH_CXX11_ABI: "0"
   rules:
     - if: $QUICK_STATS_AARCH64 == "true"
   before_script:
     - apt-get update
-    - apt-get install -y cmake curl unzip git libssl-dev
+    - apt-get install -y curl unzip
     - rustup default stable
     - rustup target add aarch64-unknown-linux-gnu
-    # libtorch for aarch64 has no prebuilt download — build the pinned
-    # version from source once; the cache key includes the version so a
-    # bump rebuilds. Skipped entirely when the cache already holds it.
+    # Unpack the pinned prebuilt wheel (82 MB); skipped when the cache
+    # already holds it. Cache key includes the version so a bump
+    # refetches.
     - |
-      if [ -f libtorch-aarch64/lib/libtorch_cpu.so ]; then
-        echo "cached aarch64 libtorch ${LIBTORCH_VERSION} present - skipping source build"
+      if [ -f torch-aarch64/torch/lib/libtorch_cpu.so ]; then
+        echo "cached aarch64 libtorch ${LIBTORCH_VERSION} present - skipping wheel download"
       else
-        git clone --recursive --depth 1 --branch "v${LIBTORCH_VERSION}" https://github.com/pytorch/pytorch
-        cd pytorch
-        mkdir build && cd build
-        # CPU-only, C++-only build (no python bindings, no CUDA/ROCm,
-        # optional third-party deps off). cxx11 ABI to match the
-        # official +cpu zips the desktop bundles on other platforms.
-        cmake .. \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-          -DBUILD_SHARED_LIBS=ON \
-          -DCMAKE_INSTALL_PREFIX="$CI_PROJECT_DIR/libtorch-aarch64" \
-          -DTORCH_BUILD_PYTHON=OFF \
-          -DTORCH_BUILD_CAFFE2=OFF \
-          -DTORCH_BUILD_PKG=OFF \
-          -DBUILD_TEST=OFF \
-          -DUSE_XNNPACK=OFF \
-          -DUSE_MKLDNN=OFF \
-          -DUSE_QNNPACK=OFF \
-          -DUSE_KINETO=OFF \
-          -DUSE_DISTRIBUTED=OFF \
-          -DUSE_GFLAGS=OFF \
-          -DUSE_FBGEMM=OFF \
-          -DUSE_XDR=OFF \
-          -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=1"
-        # (make target is `torch` — the aggregate library that pulls in
-        # torch_cpu and c10; 2.2.2 has no `libtorch` target)
-        make -j"$(nproc)" torch
-        make install
+        rm -rf torch-aarch64 && mkdir -p torch-aarch64
+        curl -fsSL "${TORCH_AARCH64_WHEEL_URL}" -o /tmp/torch.whl
+        unzip -q /tmp/torch.whl -d torch-aarch64
+        rm /tmp/torch.whl
       fi
-    - export LIBTORCH="$CI_PROJECT_DIR/libtorch-aarch64"
-    - export LD_LIBRARY_PATH="$CI_PROJECT_DIR/libtorch-aarch64/lib:$LD_LIBRARY_PATH"
+    - export LIBTORCH="$CI_PROJECT_DIR/torch-aarch64/torch"
+    - export LD_LIBRARY_PATH="$CI_PROJECT_DIR/torch-aarch64/torch/lib:$LD_LIBRARY_PATH"
   cache:
     key: aarch64-${LIBTORCH_VERSION}
     paths:
-      - libtorch-aarch64
+      - torch-aarch64
       - .cargo
       - target/
   script:
