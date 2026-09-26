@@ -7,6 +7,7 @@
 #
 #   $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/quick_stats/<version>/
 #     quick_stats-<version>-linux-x64       <- produced by this pipeline
+#     quick_stats-<version>-linux-aarch64   <- on demand (see linux-aarch64)
 #     quick_stats-<version>-win-x64.exe     <- MANUAL: .dev_ops/publish_windows.ps1
 #     quick_stats-<version>-mac-arm64       <- MANUAL: .dev_ops/publish_mac_binaries.sh
 #     quick_stats-<version>-mac-x64         <- MANUAL: .dev_ops/publish_mac_binaries.sh
@@ -24,8 +25,7 @@
 #
 # Bumping the version: change `version` in Cargo.toml (that IS the
 # registry key — LinkMesh pins the same number in quickStatsVersion.ts),
-# push, and let this pipeline publish. The linux-aarch64 job below is a
-# TODO and publishes nothing until libtorch for arm64-linux is sorted.
+# push, and let this pipeline publish.
 
 stages:
   - build
@@ -106,29 +106,86 @@ linux-amd64:
     paths:
       - builds/
 
-# Linux aarch64 — TODO, NOT published: libtorch for arm64-linux has no
-# prebuilt download and must be compiled from source. The desktop only
-# packages x64 anyway (linkmesh plan, open question 3). Kept as the future
-# build recipe; when it works, rename the artifact to the convention and
-# add the .publish-artifacts reference.
+# Linux aarch64 — ON-DEMAND build + publish (not part of normal pushes).
+#
+# Why on demand: there is no prebuilt libtorch for aarch64-linux, so the
+# job compiles the same 2.2.2 CPU release the desktop bundles, from
+# source, before linking quick_stats. The Rust side would cross-compile
+# from x86_64 fine, but torch-sys's C++ side needs an aarch64-built
+# libtorch, which only an aarch64 machine can produce. So the job:
+#   * only materializes when QUICK_STATS_AARCH64=true (set as a project
+#     CI/CD variable, or typed into a web pipeline run), and
+#   * therefore needs an aarch64 docker runner registered for this
+#     project (any ARM64 box — the current runners are x86_64).
+# First run builds libtorch from source (~30-60 min, cached afterwards);
+# then it links, publishes quick_stats-<ver>-linux-aarch64 like amd64,
+# and stays out of the way until asked again. Note the desktop currently
+# only packages x64 (linkmesh plan, open question 3) — this artifact is
+# for aarch64 hosts running LinkMesh manually or on the server.
+# NOTE: a `:` + space inside a plain YAML scalar parses the line as a
+# mapping and fails lint — leading-quote any script line containing one.
 linux-aarch64:
   stage: build
   image: rust:latest
   rules:
-    - if: $CI_COMMIT_TAG
-    - if: $CI_PIPELINE_SOURCE == "web"
-    - changes:
-        - Cargo.toml
-        - Cargo.lock
-        - .gitlab-ci.yml
-        - src/**/*
-  # Placeholder — fails fast with a TODO instead of pretending. When it
-  # becomes real: build libtorch for aarch64-linux from source in
-  # before_script (no prebuilt exists), set LIBTORCH/LD_LIBRARY_PATH, and
-  # publish like linux-amd64 (artifact quick_stats-<ver>-linux-aarch64).
-  # NOTE: the quote must be the FIRST character after "- " — a `:` + space
-  # inside a plain scalar (e.g. `echo "TODO: ..."` or `echo 'TODO: ...'`)
-  # parses as a YAML mapping and fails the pipeline lint.
+    - if: $QUICK_STATS_AARCH64 == "true"
+  before_script:
+    - apt-get update
+    - apt-get install -y cmake curl unzip git libssl-dev
+    - rustup default stable
+    - rustup target add aarch64-unknown-linux-gnu
+    # libtorch for aarch64 has no prebuilt download — build the pinned
+    # version from source once; the cache key includes the version so a
+    # bump rebuilds. Skipped entirely when the cache already holds it.
+    - |
+      if [ -f libtorch-aarch64/lib/libtorch_cpu.so ]; then
+        echo "cached aarch64 libtorch ${LIBTORCH_VERSION} present - skipping source build"
+      else
+        git clone --recursive --depth 1 --branch "v${LIBTORCH_VERSION}" https://github.com/pytorch/pytorch
+        cd pytorch
+        mkdir build && cd build
+        # CPU-only, C++-only build (no python bindings, no CUDA/ROCm,
+        # optional third-party deps off). cxx11 ABI to match the
+        # official +cpu zips the desktop bundles on other platforms.
+        cmake .. \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+          -DBUILD_SHARED_LIBS=ON \
+          -DCMAKE_INSTALL_PREFIX="$CI_PROJECT_DIR/libtorch-aarch64" \
+          -DTORCH_BUILD_PYTHON=OFF \
+          -DTORCH_BUILD_CAFFE2=OFF \
+          -DTORCH_BUILD_PKG=OFF \
+          -DBUILD_TEST=OFF \
+          -DUSE_XNNPACK=OFF \
+          -DUSE_MKLDNN=OFF \
+          -DUSE_QNNPACK=OFF \
+          -DUSE_KINETO=OFF \
+          -DUSE_DISTRIBUTED=OFF \
+          -DUSE_GFLAGS=OFF \
+          -DUSE_FBGEMM=OFF \
+          -DUSE_XDR=OFF \
+          -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=1"
+        # (make target is `torch` — the aggregate library that pulls in
+        # torch_cpu and c10; 2.2.2 has no `libtorch` target)
+        make -j"$(nproc)" torch
+        make install
+      fi
+    - export LIBTORCH="$CI_PROJECT_DIR/libtorch-aarch64"
+    - export LD_LIBRARY_PATH="$CI_PROJECT_DIR/libtorch-aarch64/lib:$LD_LIBRARY_PATH"
+  cache:
+    key: aarch64-${LIBTORCH_VERSION}
+    paths:
+      - libtorch-aarch64
+      - .cargo
+      - target/
   script:
-    - "echo 'TODO: build libtorch for aarch64-linux from source first (no prebuilt exists) - then mirror linux-amd64'"
-    - exit 1
+    - |
+      QS_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+      [ -n "$QS_VERSION" ] || { echo "FATAL: could not read version from Cargo.toml"; exit 1; }
+    - rm -rf builds && mkdir -p builds
+    - cargo build --release --target=aarch64-unknown-linux-gnu
+    - cp target/aarch64-unknown-linux-gnu/release/quick_stats "builds/quick_stats-${QS_VERSION}-linux-aarch64"
+    - !reference [.publish-artifacts, publish-script]
+  artifacts:
+    paths:
+      - builds/
