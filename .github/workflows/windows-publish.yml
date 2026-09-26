@@ -1,0 +1,89 @@
+# Windows x64 build + publish — on a GitHub-hosted Windows runner.
+#
+# Produces the one artifact the GitLab pipeline cannot (a tch binary
+# cannot be cross-compiled to windows from linux: libtorch's windows
+# build is MSVC C++ ABI and mingw is GNU C++ — they cannot link), and
+# uploads it to the SAME registry the GitLab CI uses, keeping one
+# publish contract for every platform:
+#
+#   https://gitlab.byte.lu/api/v4/projects/14/packages/generic/quick_stats/<version>/
+#     quick_stats-<version>-win-x64.exe     <- this workflow
+#
+# Free for public repos (this one is). Requires ONE repo secret:
+#   GITLAB_TOKEN — GitLab Personal Access Token, api scope, Developer+
+#   on olivier/quick_stats. Without the secret the build + smoke still
+#   run and only the upload is skipped, loudly.
+#
+# Version = Cargo.toml `version` (the registry key — same contract as
+# the GitLab CI: bump it and every platform publishes under it).
+
+name: windows-x64 publish
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/**/*"
+      - ".github/workflows/windows-publish.yml"
+  workflow_dispatch:
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    env:
+      # MUST stay in lockstep with the libtorch LinkMesh bundles — the
+      # desktop pins 2.2.2 for every platform.
+      LIBTORCH_VERSION: "2.2.2"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version from Cargo.toml
+        id: ver
+        shell: pwsh
+        run: |
+          $m = Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1
+          $v = $m.Matches[0].Groups[1].Value
+          if (-not $v) { Write-Error "could not read version from Cargo.toml"; exit 1 }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "publishing quick_stats $v (win-x64)"
+
+      - name: Download libtorch (win, cpu)
+        shell: pwsh
+        run: |
+          curl.exe -fsSL -o libtorch.zip "https://download.pytorch.org/libtorch/cpu/libtorch-win-shared-with-deps-$env:LIBTORCH_VERSION%2Bcpu.zip"
+          Expand-Archive -Path libtorch.zip -DestinationPath .
+          Remove-Item libtorch.zip
+
+      - name: Build
+        shell: pwsh
+        run: cargo build --release
+        env:
+          LIBTORCH: ${{ github.workspace }}\libtorch
+          LIBTORCH_BYPASS_VERSION_CHECK: "1"
+
+      - name: Smoke — exe must start with the libtorch DLLs on PATH
+        shell: pwsh
+        run: |
+          $env:PATH = "$(Get-Location)\libtorch\lib;$env:PATH"
+          & ".\target\release\quick_stats.exe" --help
+          if ($LASTEXITCODE -ne 0) { Write-Error "quick_stats.exe failed to start"; exit 1 }
+
+      - name: Publish to the GitLab generic registry
+        shell: pwsh
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $name = "quick_stats-$v-win-x64.exe"
+          if (-not $env:GITLAB_TOKEN) {
+            Write-Host "WARNING: no GITLAB_TOKEN secret set - $name NOT uploaded."
+            Write-Host "Add the secret (Settings > Secrets and variables > Actions) and re-run this workflow."
+            exit 0
+          }
+          curl.exe -sfS --header "PRIVATE-TOKEN: $env:GITLAB_TOKEN" `
+            --upload-file "target\release\quick_stats.exe" `
+            "https://gitlab.byte.lu/api/v4/projects/14/packages/generic/quick_stats/$v/$name"
+          if ($LASTEXITCODE -ne 0) { Write-Error "registry upload failed for $name"; exit 1 }
+          Write-Host "Published $name for quick_stats $v"
