@@ -1,6 +1,6 @@
 [package]
 name = "quick_stats"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -13,7 +13,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 clap = { version = "4.0", features = ["derive"] }
 battery = "0.7.8"
-reqwest = { version = "0.12.7", features = ["stream"] }
+# rustls (not default-tls): native-tls pulls in OpenSSL on linux, which
+# cannot be cross-compiled for the aarch64 CI build. rustls keeps the
+# whole tree OpenSSL-free and cross-compilable everywhere.
+reqwest = { version = "0.12.7", default-features = false, features = ["stream", "rustls-tls"] }
 tokio = { version = "1.0", features = ["rt-multi-thread"] }
 rand = "0.8.5"
 surge-ping = "0.8"
