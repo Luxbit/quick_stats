@@ -1,5 +1,5 @@
-# Build ALL quick_stats artifacts on GitHub-hosted runners and attach
-# them to this repo's release v<version>.
+# Build the linux + windows quick_stats artifacts on GitHub-hosted
+# runners and attach them to this repo's release v<version>.
 #
 # This repo is the build farm only. The artifacts are transferred to the
 # quick_stats GitLab generic registry MANUALLY (.dev_ops/upload_registry.sh)
@@ -8,9 +8,12 @@
 #
 #   release v<pin>/  quick_stats-<pin>-linux-x64      (ubuntu-latest)
 #                    quick_stats-<pin>-linux-aarch64  (ubuntu-24.04-arm, native)
-#                    quick_stats-<pin>-mac-arm64      (macos-14, M1)
-#                    quick_stats-<pin>-mac-x64        (macos-13, last Intel)
 #                    quick_stats-<pin>-win-x64.exe    (windows-latest, MSVC)
+#
+# mac-arm64 / mac-x64 are NOT built here: they come from
+# .dev_ops/publish_mac_binaries.sh on a dev Mac, which builds against the
+# exact libtorch trees LinkMesh bundles and uploads straight to the
+# GitLab registry.
 #
 # linux-aarch64 links against the PyPI manylinux wheel (download.pytorch.org
 # has no aarch64 zips; the wheel is the official prebuilt, CPU-only,
@@ -51,10 +54,6 @@ jobs:
             runs-on: ubuntu-latest
           - name: linux-aarch64
             runs-on: ubuntu-24.04-arm
-          - name: mac-arm64
-            runs-on: macos-14
-          - name: mac-x64
-            runs-on: macos-13
           - name: win-x64
             runs-on: windows-latest
     steps:
@@ -86,24 +85,6 @@ jobs:
           echo "LIBTORCH_BYPASS_VERSION_CHECK=1" >> "$GITHUB_ENV"
           # the wheel is a PRE-cxx11-ABI build — torch-sys defaults to 1
           echo "LIBTORCH_CXX11_ABI=0" >> "$GITHUB_ENV"
-
-      - name: Set up libtorch (mac-arm64)
-        if: matrix.name == 'mac-arm64'
-        run: |
-          curl -fsSL -o /tmp/libtorch.zip "https://download.pytorch.org/libtorch/cpu/libtorch-macos-arm64-${LIBTORCH_VERSION}.zip"
-          unzip -q /tmp/libtorch.zip -d "$RUNNER_TEMP"
-          echo "LIBTORCH=$RUNNER_TEMP/libtorch" >> "$GITHUB_ENV"
-          echo "DYLD_LIBRARY_PATH=$RUNNER_TEMP/libtorch/lib" >> "$GITHUB_ENV"
-          echo "LIBTORCH_BYPASS_VERSION_CHECK=1" >> "$GITHUB_ENV"
-
-      - name: Set up libtorch (mac-x64)
-        if: matrix.name == 'mac-x64'
-        run: |
-          curl -fsSL -o /tmp/libtorch.zip "https://download.pytorch.org/libtorch/cpu/libtorch-macos-x86_64-${LIBTORCH_VERSION}.zip"
-          unzip -q /tmp/libtorch.zip -d "$RUNNER_TEMP"
-          echo "LIBTORCH=$RUNNER_TEMP/libtorch" >> "$GITHUB_ENV"
-          echo "DYLD_LIBRARY_PATH=$RUNNER_TEMP/libtorch/lib" >> "$GITHUB_ENV"
-          echo "LIBTORCH_BYPASS_VERSION_CHECK=1" >> "$GITHUB_ENV"
 
       - name: Set up libtorch (win-x64)
         if: matrix.name == 'win-x64'
