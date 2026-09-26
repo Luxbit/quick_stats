@@ -115,26 +115,13 @@ linux-aarch64:
         - Cargo.lock
         - .gitlab-ci.yml
         - src/**/*
-  before_script:
-    - apt-get update
-    - apt-get install -y cmake curl unzip pkg-config libssl-dev libdbus-1-dev libudev-dev
-    - rustup default stable
-    - rustup target add aarch64-unknown-linux-gnu
-    # TODO: Set up PyTorch for the tch crate — libtorch for aarch64-linux
-    # needs to be built from source (no prebuilt exists), e.g. via the
-    # PyTorch source build instructions for aarch64.
-    # When that is done, set LIBTORCH to the built tree and export
-    # LD_LIBRARY_PATH accordingly.
-    - echo "TODO: libtorch for aarch64-linux not set up — build from source first"
-    - exit 1
-  cache:
-    key: cargo-cache
-    paths:
-      - .cargo
-      - target/
+  # Placeholder — fails fast with a TODO instead of pretending. When it
+  # becomes real: build libtorch for aarch64-linux from source in
+  # before_script (no prebuilt exists), set LIBTORCH/LD_LIBRARY_PATH, and
+  # publish like linux-amd64 (artifact quick_stats-<ver>-linux-aarch64).
+  # NOTE: the quote must be the FIRST character after "- " — a `:` + space
+  # inside a plain scalar (e.g. `echo "TODO: ..."` or `echo 'TODO: ...'`)
+  # parses as a YAML mapping and fails the pipeline lint.
   script:
-    - |
-      QS_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-    - rm -rf builds && mkdir -p builds
-    - cargo build --release --target=aarch64-unknown-linux-gnu
-    - cp target/aarch64-unknown-linux-gnu/release/quick_stats "builds/quick_stats-${QS_VERSION}-linux-arm64"
+    - "echo 'TODO: build libtorch for aarch64-linux from source first (no prebuilt exists) - then mirror linux-amd64'"
+    - exit 1
