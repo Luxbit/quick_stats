@@ -1,2 +1,4 @@
 /target
+/builds
+/libtorch-win
 .dev_ops/upload_binary.sh

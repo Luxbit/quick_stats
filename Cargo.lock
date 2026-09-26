@@ -1234,7 +1234,7 @@ dependencies = [
 
 [[package]]
 name = "quick_stats"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "battery",
  "clap",

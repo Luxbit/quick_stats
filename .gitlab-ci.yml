@@ -1,23 +1,83 @@
+#
+# quick_stats — per-platform binaries for the LinkMesh desktop app.
+#
+# Publishing contract — the pinned location LinkMesh's `yarn download:deps`
+# fetches (LinkMesh NEVER builds quick_stats itself; it downloads these
+# prebuilt artifacts, like it does for libtorch and SurrealDB):
+#
+#   $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/quick_stats/<version>/
+#     quick_stats-<version>-linux-x64       <- produced by this pipeline
+#     quick_stats-<version>-win-x64.exe     <- MANUAL: .dev_ops/publish_windows.ps1
+#     quick_stats-<version>-mac-arm64       <- MANUAL: .dev_ops/publish_mac_binaries.sh
+#     quick_stats-<version>-mac-x64         <- MANUAL: .dev_ops/publish_mac_binaries.sh
+#
+# Why manual for mac/win: this project has no mac runner (the same
+# constraint as the LinkMesh desktop mac build itself), and a `tch`-based
+# binary cannot be cross-compiled to windows from linux — the LinkMesh
+# doc_processor .exe artifacts are manual uploads from a Windows machine
+# for exactly this reason (linkmesh: services/doc_processor/
+# doc_processor.dockerfile, "only compilable on windows :S").
+#
+# The registry is read by LinkMesh without any token (this project is
+# public and the instance serves generic-package downloads unauthenticated)
+# and written here with the job token (own-project access, no allowlist).
+#
+# Bumping the version: change `version` in Cargo.toml (that IS the
+# registry key — LinkMesh pins the same number in quickStatsVersion.ts),
+# push, and let this pipeline publish. The linux-aarch64 job below is a
+# TODO and publishes nothing until libtorch for arm64-linux is sorted.
+
 stages:
   - build
 
 variables:
   CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
-  DOCKER_BUILDKIT: 1
+  # MUST stay in lockstep with the libtorch LinkMesh bundles — the desktop
+  # downloader pins 2.2.2 for every platform. This binary links against
+  # 2.2.2 here and runs against the desktop's bundled 2.2.2 at runtime.
+  LIBTORCH_VERSION: "2.2.2"
 
-# Linux amd64 build
+# Uploads every builds/quick_stats-* to this project's generic package
+# registry under the Cargo.toml version. The job token always has access
+# to its OWN project, so no allowlist or PAT is needed on the upload side.
+.publish-artifacts:
+  publish-script:
+    - |
+      set -euo pipefail
+      QS_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+      [ -n "$QS_VERSION" ] || { echo "FATAL: could not read version from Cargo.toml"; exit 1; }
+      shopt -s nullglob
+      files=(builds/quick_stats-*)
+      [ ${#files[@]} -gt 0 ] || { echo "FATAL: nothing in builds/ to publish"; exit 1; }
+      for f in "${files[@]}"; do
+        echo "Publishing $f -> packages/generic/quick_stats/$QS_VERSION/$(basename "$f")"
+        curl -sfS --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$f" \
+          "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/quick_stats/$QS_VERSION/$(basename "$f")" \
+          || { echo "FATAL: generic-registry upload failed for $f"; exit 1; }
+      done
+      echo "Published ${#files[@]} artifact(s) for quick_stats $QS_VERSION"
+
+# Linux amd64 build — the only CI-produced artifact.
 linux-amd64:
   stage: build
   image: rust:latest
+  rules:
+    # Republish on tags, manual triggers, and pushes that touch the recipe.
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - changes:
+        - Cargo.toml
+        - Cargo.lock
+        - .gitlab-ci.yml
+        - src/**/*
   before_script:
     - apt-get update
     - apt-get install -y cmake curl unzip pkg-config libssl-dev libdbus-1-dev libudev-dev
     - rustup default stable
     - rustup target add x86_64-unknown-linux-gnu
-
-    # Setup PyTorch for tch crate
+    # Setup PyTorch for the tch crate (pinned — see LIBTORCH_VERSION)
     - mkdir -p /opt/libtorch
-    - curl -L https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.2.0%2Bcpu.zip -o /tmp/libtorch.zip
+    - curl -L https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2Bcpu.zip -o /tmp/libtorch.zip
     - unzip /tmp/libtorch.zip -d /opt
     - rm /tmp/libtorch.zip
     - export LIBTORCH=/opt/libtorch
@@ -28,61 +88,53 @@ linux-amd64:
       - .cargo
       - target/
   script:
-    - mkdir -p builds
+    - |
+      QS_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+      [ -n "$QS_VERSION" ] || { echo "FATAL: could not read version from Cargo.toml"; exit 1; }
+    - rm -rf builds && mkdir -p builds
     - cargo build --release --target=x86_64-unknown-linux-gnu
-    - cp target/x86_64-unknown-linux-gnu/release/quick_stats builds/quick_stats-linux-amd64
+    - cp target/x86_64-unknown-linux-gnu/release/quick_stats "builds/quick_stats-${QS_VERSION}-linux-x64"
+    - !reference [.publish-artifacts, publish-script]
   artifacts:
     paths:
       - builds/
 
-# Linux aarch64 build (TODO: libtorch for arm on linux needs to be build from source)
+# Linux aarch64 — TODO, NOT published: libtorch for arm64-linux has no
+# prebuilt download and must be compiled from source. The desktop only
+# packages x64 anyway (linkmesh plan, open question 3). Kept as the future
+# build recipe; when it works, rename the artifact to the convention and
+# add the .publish-artifacts reference.
 linux-aarch64:
   stage: build
   image: rust:latest
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - changes:
+        - Cargo.toml
+        - Cargo.lock
+        - .gitlab-ci.yml
+        - src/**/*
   before_script:
     - apt-get update
-    - apt-get install -y cmake curl unzip pkg-config libssl-dev gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
-    # Set up multiarch for arm64
-    - dpkg --add-architecture arm64
-    - apt-get update
-    - apt-get install -y libssl-dev:arm64
+    - apt-get install -y cmake curl unzip pkg-config libssl-dev libdbus-1-dev libudev-dev
     - rustup default stable
     - rustup target add aarch64-unknown-linux-gnu
-    # Configure OpenSSL for cross-compilation
-    - export OPENSSL_DIR=/usr/aarch64-linux-gnu
-    - export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
-    - export OPENSSL_INCLUDE_DIR=/usr/include/aarch64-linux-gnu
-    - export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
-    - export PKG_CONFIG_ALLOW_CROSS=1
-    # Setup PyTorch for tch crate
-    - mkdir -p /opt/libtorch
-    - curl -L https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.2.0%2Bcpu.zip -o /tmp/libtorch.zip
-    - unzip /tmp/libtorch.zip -d /opt
-    - rm /tmp/libtorch.zip
-    - export LIBTORCH=/opt/libtorch
-    - export LD_LIBRARY_PATH=/opt/libtorch/lib:$LD_LIBRARY_PATH
+    # TODO: Set up PyTorch for the tch crate — libtorch for aarch64-linux
+    # needs to be built from source (no prebuilt exists), e.g. via the
+    # PyTorch source build instructions for aarch64.
+    # When that is done, set LIBTORCH to the built tree and export
+    # LD_LIBRARY_PATH accordingly.
+    - echo "TODO: libtorch for aarch64-linux not set up — build from source first"
+    - exit 1
   cache:
     key: cargo-cache
     paths:
       - .cargo
       - target/
   script:
-    - mkdir -p builds
-    # Configure cargo with explicit settings for cross-compilation
-    - mkdir -p .cargo
-    - echo '[target.aarch64-unknown-linux-gnu]' > .cargo/config.toml
-    - echo 'linker = "aarch64-linux-gnu-gcc"' >> .cargo/config.toml
-    - echo 'rustflags = ["-C", "link-arg=-L/usr/lib/aarch64-linux-gnu"]' >> .cargo/config.toml
-    # Set target-specific environment variables but not global CC/CXX
-    - export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-    - export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
-    - export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
-    # Make sure we do NOT set CC and CXX globally
-    - unset CC
-    - unset CXX
-    # Build with zstd features disabled for cross-compilation
-    - RUSTFLAGS="-C target-feature=+neon" cargo build --release --target=aarch64-unknown-linux-gnu
-    - cp target/aarch64-unknown-linux-gnu/release/quick_stats builds/quick_stats-linux-aarch64
-  artifacts:
-    paths:
-      - builds/
+    - |
+      QS_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+    - rm -rf builds && mkdir -p builds
+    - cargo build --release --target=aarch64-unknown-linux-gnu
+    - cp target/aarch64-unknown-linux-gnu/release/quick_stats "builds/quick_stats-${QS_VERSION}-linux-arm64"
