@@ -24,6 +24,11 @@
 
 name: build all platforms
 
+env:
+  # MUST stay in lockstep with the libtorch LinkMesh bundles — the
+  # desktop pins 2.2.2 for every platform.
+  LIBTORCH_VERSION: "2.2.2"
+
 on:
   push:
     branches: [master]
