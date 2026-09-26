@@ -112,10 +112,9 @@ linux-amd64:
     paths:
       - builds/
 
-# Linux aarch64 — ON-DEMAND CROSS-BUILD on the x86_64 runners (no ARM
-# runner needed), gated behind QUICK_STATS_AARCH64=true (project CI/CD
-# variable, or typed into a web pipeline run). Normal pushes: job absent,
-# pipeline green.
+# Linux aarch64 — CROSS-BUILD on the x86_64 runners (no ARM runner
+# needed), same triggers as linux-amd64: tags, web pipelines, and pushes
+# that touch the build recipe.
 #
 # How it works, entirely inside the unprivileged job container:
 #   1. Rust + the torch-sys C++ shim are CROSS-COMPILED at native speed
@@ -153,7 +152,15 @@ linux-aarch64:
     # mismatches against the ABI=0 wheel libraries.
     LIBTORCH_CXX11_ABI: "0"
   rules:
-    - if: $QUICK_STATS_AARCH64 == "true"
+    # Republish on tags, manual triggers, and pushes that touch the
+    # recipe — identical to linux-amd64 so both artifacts stay in sync.
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - changes:
+        - Cargo.toml
+        - Cargo.lock
+        - .gitlab-ci.yml
+        - src/**/*
   before_script:
     - apt-get update
     - apt-get install -y curl unzip file g++-aarch64-linux-gnu qemu-user-static
