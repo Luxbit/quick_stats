@@ -1060,7 +1060,7 @@ dependencies = [
 
 [[package]]
 name = "quick_stats"
-version = "0.2.1"
+version = "1.2.0"
 dependencies = [
  "battery",
  "clap",
