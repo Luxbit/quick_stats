@@ -1,0 +1,178 @@
+# Build ALL quick_stats artifacts on GitHub-hosted runners and attach
+# them to this repo's release v<version>.
+#
+# This repo is the build farm only. The artifacts are transferred to the
+# quick_stats GitLab generic registry MANUALLY (.dev_ops/upload_registry.sh)
+# — LinkMesh deliberately pulls from GitLab only, so GitHub is never on
+# its critical path.
+#
+#   release v<pin>/  quick_stats-<pin>-linux-x64      (ubuntu-latest)
+#                    quick_stats-<pin>-linux-aarch64  (ubuntu-24.04-arm, native)
+#                    quick_stats-<pin>-mac-arm64      (macos-14, M1)
+#                    quick_stats-<pin>-mac-x64        (macos-13, last Intel)
+#                    quick_stats-<pin>-win-x64.exe    (windows-latest, MSVC)
+#
+# linux-aarch64 links against the PyPI manylinux wheel (download.pytorch.org
+# has no aarch64 zips; the wheel is the official prebuilt, CPU-only,
+# pre-cxx11-ABI -> LIBTORCH_CXX11_ABI=0). No cross-compilation anywhere:
+# every job builds on its native architecture and smokes the binary
+# locally before it may reach the release.
+#
+# Version = Cargo.toml `version` (the same registry key LinkMesh pins).
+# Re-runs overwrite release assets (--clobber). No secrets: the built-in
+# GITHUB_TOKEN with contents: write is enough.
+
+name: build all platforms
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/**/*"
+      - ".github/workflows/build-all.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            runs-on: ubuntu-latest
+          - name: linux-aarch64
+            runs-on: ubuntu-24.04-arm
+          - name: mac-arm64
+            runs-on: macos-14
+          - name: mac-x64
+            runs-on: macos-13
+          - name: win-x64
+            runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps (linux)
+        if: startsWith(matrix.name, 'linux')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl unzip file pkg-config libssl-dev libdbus-1-dev libudev-dev
+
+      - name: Set up libtorch (linux-x64 — official CPU zip)
+        if: matrix.name == 'linux-x64'
+        run: |
+          curl -fsSL -o /tmp/libtorch.zip "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2Bcpu.zip"
+          unzip -q /tmp/libtorch.zip -d /opt
+          rm /tmp/libtorch.zip
+          echo "LIBTORCH=/opt/libtorch" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=/opt/libtorch/lib" >> "$GITHUB_ENV"
+          echo "LIBTORCH_BYPASS_VERSION_CHECK=1" >> "$GITHUB_ENV"
+
+      - name: Set up libtorch (linux-aarch64 — PyPI manylinux wheel)
+        if: matrix.name == 'linux-aarch64'
+        run: |
+          curl -fsSL -o torch.whl "https://files.pythonhosted.org/packages/c3/7c/aeb0c5789a3f10cf909640530cd75b314959b9d9914a4996ed2c7bf8779d/torch-${LIBTORCH_VERSION}-cp310-cp310-manylinux2014_aarch64.whl"
+          mkdir torch-aarch64 && unzip -q torch.whl -d torch-aarch64 && rm torch.whl
+          echo "LIBTORCH=$PWD/torch-aarch64/torch" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$PWD/torch-aarch64/torch/lib:$PWD/torch-aarch64/torch.libs" >> "$GITHUB_ENV"
+          echo "LIBTORCH_BYPASS_VERSION_CHECK=1" >> "$GITHUB_ENV"
+          # the wheel is a PRE-cxx11-ABI build — torch-sys defaults to 1
+          echo "LIBTORCH_CXX11_ABI=0" >> "$GITHUB_ENV"
+
+      - name: Set up libtorch (mac-arm64)
+        if: matrix.name == 'mac-arm64'
+        run: |
+          curl -fsSL -o /tmp/libtorch.zip "https://download.pytorch.org/libtorch/cpu/libtorch-macos-arm64-${LIBTORCH_VERSION}.zip"
+          unzip -q /tmp/libtorch.zip -d "$RUNNER_TEMP"
+          echo "LIBTORCH=$RUNNER_TEMP/libtorch" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$RUNNER_TEMP/libtorch/lib" >> "$GITHUB_ENV"
+          echo "LIBTORCH_BYPASS_VERSION_CHECK=1" >> "$GITHUB_ENV"
+
+      - name: Set up libtorch (mac-x64)
+        if: matrix.name == 'mac-x64'
+        run: |
+          curl -fsSL -o /tmp/libtorch.zip "https://download.pytorch.org/libtorch/cpu/libtorch-macos-x86_64-${LIBTORCH_VERSION}.zip"
+          unzip -q /tmp/libtorch.zip -d "$RUNNER_TEMP"
+          echo "LIBTORCH=$RUNNER_TEMP/libtorch" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$RUNNER_TEMP/libtorch/lib" >> "$GITHUB_ENV"
+          echo "LIBTORCH_BYPASS_VERSION_CHECK=1" >> "$GITHUB_ENV"
+
+      - name: Set up libtorch (win-x64)
+        if: matrix.name == 'win-x64'
+        shell: pwsh
+        run: |
+          curl.exe -fsSL -o libtorch.zip "https://download.pytorch.org/libtorch/cpu/libtorch-win-shared-with-deps-$env:LIBTORCH_VERSION%2Bcpu.zip"
+          Expand-Archive -Path libtorch.zip -DestinationPath .
+          Remove-Item libtorch.zip
+          "LIBTORCH=$(Get-Location)\libtorch" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "LIBTORCH_BYPASS_VERSION_CHECK=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Smoke — the binary must start against its libtorch
+        if: runner.os != 'Windows'
+        run: ./target/release/quick_stats --help
+
+      - name: Smoke — exe must start with the libtorch DLLs on PATH (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PATH = "$(Get-Location)\libtorch\lib;$env:PATH"
+          & ".\target\release\quick_stats.exe" --help
+          if ($LASTEXITCODE -ne 0) { Write-Error "quick_stats.exe failed to start"; exit 1 }
+
+      - name: Stage artifact (registry naming convention)
+        shell: bash
+        env:
+          MATRIX_NAME: ${{ matrix.name }}
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          [ -n "$VERSION" ] || { echo "FATAL: could not read version from Cargo.toml"; exit 1; }
+          mkdir -p stage
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/release/quick_stats.exe "stage/quick_stats-${VERSION}-win-x64.exe"
+          else
+            cp target/release/quick_stats "stage/quick_stats-${VERSION}-${MATRIX_NAME}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: stage/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Read version from Cargo.toml
+        id: ver
+        run: |
+          V=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          [ -n "$V" ] || { echo "FATAL: could not read version from Cargo.toml"; exit 1; }
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Create release v<version> and attach all artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          TAG="v$V"
+          ls -la artifacts/
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" 2>/dev/null || \
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "quick_stats $V" \
+              --notes "Prebuilt binaries for quick_stats $V, built by GitHub on native runners for every platform. These are uploaded manually to the GitLab generic registry that LinkMesh pulls from (.dev_ops/upload_registry.sh)."
+          gh release upload "$TAG" artifacts/* --repo "$GITHUB_REPOSITORY" --clobber
