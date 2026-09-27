@@ -1,10 +1,12 @@
 # Build + test on every push/PR to master.
 #
-# tch needs libtorch to build (and at test runtime), so the pinned CPU
-# libtorch is set up first — same version and recipe as the GitLab
-# linux-amd64 job. MUST stay in lockstep with the libtorch LinkMesh
-# bundles (the desktop pins 2.2.2 for every platform). The version check
-# bypass matches the GitLab job (tch 0.15 hard-codes 2.2.0).
+# This is the TEST gate: build-all.yml builds the shipped artifacts, this
+# one runs cargo test (it is the only workflow that does). tch needs
+# libtorch to build (and at test runtime), so the pinned CPU libtorch is
+# set up first — MUST stay in lockstep with the libtorch LinkMesh bundles
+# (the desktop pins 2.2.2 for every platform; build-all.yml uses the same
+# version). The version check bypass matches build-all's jobs (tch 0.15
+# hard-codes 2.2.0).
 
 name: Rust
 

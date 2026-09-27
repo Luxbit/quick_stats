@@ -5,7 +5,7 @@
 # and the registry LinkMesh pulls from.
 #
 # Usage:
-#   GITLAB_TOKEN=glpat-... .dev_ops/upload_registry.sh quick_stats-0.2.1-*
+#   GITLAB_TOKEN=glpat-... .dev_ops/upload_registry.sh quick_stats-<version>-*
 #
 #   Filenames must follow the registry convention (that is what the
 #   GitHub release assets are named):
