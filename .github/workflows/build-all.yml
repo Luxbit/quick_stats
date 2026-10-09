@@ -102,11 +102,15 @@ jobs:
       - name: Graph purity — no tch in the win/linux graphs
         shell: bash
         run: |
-          if cargo tree -e normal | grep -Eq '^(tch|torch-sys) v'; then
+          # --prefix none flattens the tree: cargo tree indents dependency
+          # lines ("├── ort v..."), so the anchored greps below only work on
+          # flat output. Without it the tch check is a silent no-op and the
+          # ort-presence check always fails.
+          if cargo tree -e normal --prefix none | grep -Eq '^(tch|torch-sys) v'; then
             echo "FATAL: tch/torch-sys leaked into the ${{ matrix.name }} (onnx) dependency graph"
             exit 1
           fi
-          cargo tree -e normal | grep -q '^ort v' || { echo "FATAL: ort missing from the graph"; exit 1; }
+          cargo tree -e normal --prefix none | grep -q '^ort v' || { echo "FATAL: ort missing from the graph"; exit 1; }
 
       - name: Build
         run: cargo build --release
