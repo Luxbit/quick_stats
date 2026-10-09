@@ -3,10 +3,14 @@
 # Build + publish the macOS quick_stats binaries (the ones the LinkMesh
 # desktop bundles for mac). Run on a dev Mac.
 #
-# For each apple target (arm64 + x64) this script:
+# For the apple target (arm64 — Intel macOS dropped 2026-10, LinkMesh
+# decision) this script:
 #   1. builds quick_stats against the SAME libtorch (2.2.2, matching arch)
-#      that LinkMesh's `yarn download:deps` bundles into libs/mac, so the
-#      published artifact and the desktop's runtime libtorch cannot drift
+#      that LinkMesh stages under libs/mac, so the published artifact and
+#      the desktop's runtime libtorch cannot drift. NB: linkmesh's own
+#      doc_processor now stages libtorch 2.4.0 (tch 0.17 via the Luxbit
+#      forks) — but quick_stats' tch 0.15 still pairs with 2.2.2, whose
+#      arm64 tree remains staged alongside.
 #   2. stages it as builds/quick_stats-<version>-mac-<arch> (version = the
 #      Cargo.toml version — that is the registry key)
 #   3. uploads it to THIS project's generic package registry, the pinned
@@ -43,7 +47,7 @@ LIBTORCH_VERSION=2.2.2
 GITLAB_URL="${GITLAB_URL:-https://gitlab.byte.lu}"
 PROJECT_ID="${PROJECT_ID:-14}"   # olivier/quick_stats
 
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
+rustup target add aarch64-apple-darwin
 
 # Respect a custom CARGO_TARGET_DIR (dev machines may share one rust target
 # dir); default is cargo's own `target/`.
@@ -51,9 +55,8 @@ TARGET_DIR="${CARGO_TARGET_DIR:-target}"
 
 rm -rf builds && mkdir -p builds
 
-for arch in arm64 x64; do
+for arch in arm64; do
   target=aarch64-apple-darwin
-  [ "$arch" = "x64" ] && target=x86_64-apple-darwin
   libtorch="$LIBTORCH_ROOT/libtorch-${LIBTORCH_VERSION}-mac-cpu-${arch}/libtorch"
   if [ ! -d "$libtorch" ]; then
     echo "FATAL: mac libtorch not found at $libtorch"
