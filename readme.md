@@ -78,49 +78,43 @@ cargo run --release -- --features network --no-bandwidth
 ### Feature Details
 
 - **cpu**: CPU benchmark (GFLOPS) and system information (OS, architecture, memory)
-- **gpu**: GPU benchmark (TFLOPS) - supports CUDA GPUs and Metal Performance Shaders (MPS) for Apple Silicon
+- **gpu**: GPU benchmark (TFLOPS) — ONNX Runtime on Windows/Linux (CUDA, DirectML or
+  CPU execution provider, reported as `"ep"` in the JSON output), Metal Performance
+  Shaders (MPS) on Apple Silicon
 - **battery**: Battery status (charge level, charging state, capacity) if available
 - **network**: Network diagnostics (ping, public IP, download/upload speeds)
 
 ## Dependencies
 
-The GPU TFLOPS benchmark requires `libtorch` for PyTorch C++ bindings.
+Two ML backends, selected per platform at compile time:
 
-### Installation
+- **Windows / Linux — ONNX Runtime** (`ort` crate, `load-dynamic`): nothing is
+  linked or downloaded at build time; the onnxruntime shared library is located
+  at **runtime** via `ORT_DYLIB_PATH`, falling back to a dylib sitting next to
+  the executable. Without it the binary still runs — the GPU benchmark reports
+  `ep: "unavailable"`. Use onnxruntime **1.23.2** (on Linux, >= 1.23 is
+  required: 1.20–1.22 segfault at process exit).
+  - CUDA execution provider additionally needs CUDA 12 + cuDNN 9 installed;
+  - DirectML (Windows) needs a DX12 GPU;
+  - otherwise the benchmark runs on the CPU execution provider.
+- **macOS — libtorch** (tch 0.17, libtorch 2.4.0, MPS): `cargo check`/dev
+  builds fetch libtorch automatically (`download-libtorch`) when no `LIBTORCH`
+  env var is set; release binaries are built by `.dev_ops/publish_mac_binaries.sh`
+  against the exact tree LinkMesh bundles (`libtorch-2.4.0-mac-cpu-arm64`).
 
-#### Option 1: Manual Installation
+### Building for Windows/Linux (no libtorch needed)
 
-1. Download `libtorch` from https://pytorch.org/get-started/locally/
-2. Extract the library to a location of your choice
-3. Set the following environment variables:
-
-**Linux:**
-```bash
-export LIBTORCH=/path/to/libtorch
-export LD_LIBRARY_PATH=${LIBTORCH}/lib:$LD_LIBRARY_PATH
-```
-
-**Windows:**
-```powershell
-$Env:LIBTORCH = "X:\path\to\libtorch"
-$Env:Path += ";X:\path\to\libtorch\lib"
-```
-
-**macOS + Homebrew:**
-```bash
-brew install pytorch jq
-export LIBTORCH=$(brew --cellar pytorch)/$(brew info --json pytorch | jq -r '.[0].installed[0].version')
-export LD_LIBRARY_PATH=${LIBTORCH}/lib:$LD_LIBRARY_PATH
-```
-
-#### Option 2: Use the installation script
-
-For automated setup, run the provided installation script:
+No environment variables are required to build — onnxruntime is resolved at
+runtime:
 
 ```bash
-chmod +x install.sh
-./install.sh
+cargo build --release
+
+# to run the GPU benchmark, point at an onnxruntime 1.23.2 library:
+export ORT_DYLIB_PATH=/path/to/onnxruntime-linux-x64-1.23.2/lib/libonnxruntime.so   # linux
+# $Env:ORT_DYLIB_PATH = "X:\path\to\onnxruntime-win-x64-1.23.2\onnxruntime.dll"    # windows
+./target/release/quick_stats -e gpu
 ```
 
 ## To do
-- Add support for ROCm (for AMD GPUs)
+- Add support for ROCm (for AMD GPUs, via an ONNX Runtime ROCm execution provider)

@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 sysinfo = "0.31.4"
-tch = "0.15.0"
 ndarray = "0.15"                                            # For CPU numerical computations
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -21,6 +20,31 @@ tokio = { version = "1.0", features = ["rt-multi-thread"] }
 rand = "0.8.5"
 surge-ping = "0.8"
 futures-util = "0.3"
+
+# --- ML backends -------------------------------------------------------------
+# macOS: libtorch (MPS device detection + MPS matmul benchmark), built against
+# the exact tree LinkMesh bundles (libtorch-2.4.0-mac-cpu-arm64). tch 0.17 is
+# the libtorch-2.4 binding (0.15 was the 2.2 one). `download-libtorch` lets
+# bare `cargo check`/dev builds fetch libtorch when no LIBTORCH env var is
+# set; publish_mac_binaries.sh always sets LIBTORCH to the LinkMesh tree.
+[target.'cfg(target_os = "macos")'.dependencies]
+tch = { version = "0.17", features = ["download-libtorch"] }
+
+# Windows/Linux: ONNX Runtime instead of libtorch — the CI builds were
+# CPU-only libtorch anyway (the CUDA GPU feature never worked there), and ORT
+# removes the whole libtorch download/ABI/DLL ceremony.
+# load-dynamic: onnxruntime is dlopen'd at RUNTIME via ORT_DYLIB_PATH (or a
+# dylib sitting next to the executable) — nothing is linked or downloaded at
+# build time. Use onnxruntime >= 1.23 on Linux (1.20-1.22 segfault at exit).
+# Pin byte-identical with the Luxbit rust-bert/rust-sbert forks; bump in
+# lockstep only.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = [
+    "std",
+    "load-dynamic",
+    "cuda",
+    "directml",
+] }
 
 
 # Target-specific settings

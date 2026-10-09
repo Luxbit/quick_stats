@@ -10,16 +10,22 @@
 #                    quick_stats-<pin>-linux-aarch64  (ubuntu-24.04-arm, native)
 #                    quick_stats-<pin>-win-x64.exe    (windows-latest, MSVC)
 #
-# mac-arm64 / mac-x64 are NOT built here: they come from
+# mac-arm64 is NOT built here: it comes from
 # .dev_ops/publish_mac_binaries.sh on a dev Mac, which builds against the
-# exact libtorch trees LinkMesh bundles and uploads straight to the
+# exact libtorch (2.4.0) tree LinkMesh bundles and uploads straight to the
 # GitLab registry.
 #
-# linux-aarch64 links against the PyPI manylinux wheel (download.pytorch.org
-# has no aarch64 zips; the wheel is the official prebuilt, CPU-only,
-# pre-cxx11-ABI -> LIBTORCH_CXX11_ABI=0). No cross-compilation anywhere:
-# every job builds on its native architecture and smokes the binary
-# locally before it may reach the release.
+# Windows/Linux run the ONNX Runtime backend:
+# NO libtorch anywhere. ort is built with load-dynamic — nothing is linked or
+# downloaded at build time; the onnxruntime 1.23.2 shared library is located
+# at RUNTIME via ORT_DYLIB_PATH (fallback: dylib next to the executable).
+# CI downloads the dylib per leg ONLY to smoke the GPU feature. onnxruntime
+# >= 1.23 is required on Linux: 1.20–1.22 segfault at process exit (which is
+# why every smoke below asserts the binary's exit code, not just its output).
+# The win/linux graphs must contain no tch/torch-sys (graph-purity check).
+#
+# No cross-compilation anywhere: every job builds on its native architecture
+# and smokes the binary locally before it may reach the release.
 #
 # Version = Cargo.toml `version` (the same registry key LinkMesh pins).
 # Re-runs overwrite release assets (--clobber). No secrets: the built-in
@@ -28,9 +34,9 @@
 name: build all platforms
 
 env:
-  # MUST stay in lockstep with the libtorch LinkMesh bundles — the
-  # desktop pins 2.2.2 for every platform.
-  LIBTORCH_VERSION: "2.2.2"
+  # MUST stay in lockstep with the ort pin (=2.0.0-rc.13) and with the
+  # onnxruntime dylib LinkMesh's desktop bundles (doc_processor parity).
+  ONNXRUNTIME_VERSION: "1.23.2"
 
 on:
   push:
@@ -39,6 +45,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "src/**/*"
+      - "models/**/*"
       - ".github/workflows/build-all.yml"
   workflow_dispatch:
 
@@ -63,53 +70,75 @@ jobs:
         if: startsWith(matrix.name, 'linux')
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl unzip file pkg-config libssl-dev libdbus-1-dev libudev-dev
+          sudo apt-get install -y curl unzip file pkg-config libssl-dev libdbus-1-dev libudev-dev jq
 
-      - name: Set up libtorch (linux-x64 — official CPU zip)
+      - name: Download onnxruntime (linux-x64)
         if: matrix.name == 'linux-x64'
         run: |
-          curl -fsSL -o /tmp/libtorch.zip "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2Bcpu.zip"
-          unzip -q /tmp/libtorch.zip -d /opt
-          rm /tmp/libtorch.zip
-          echo "LIBTORCH=/opt/libtorch" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=/opt/libtorch/lib" >> "$GITHUB_ENV"
-          echo "LIBTORCH_BYPASS_VERSION_CHECK=1" >> "$GITHUB_ENV"
+          curl -fsSL -o /tmp/ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz"
+          tar xzf /tmp/ort.tgz -C /opt
+          rm /tmp/ort.tgz
+          echo "ORT_DYLIB_PATH=/opt/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}/lib/libonnxruntime.so" >> "$GITHUB_ENV"
 
-      - name: Set up libtorch (linux-aarch64 — PyPI manylinux wheel)
+      - name: Download onnxruntime (linux-aarch64)
         if: matrix.name == 'linux-aarch64'
         run: |
-          curl -fsSL -o torch.whl "https://files.pythonhosted.org/packages/c3/7c/aeb0c5789a3f10cf909640530cd75b314959b9d9914a4996ed2c7bf8779d/torch-${LIBTORCH_VERSION}-cp310-cp310-manylinux2014_aarch64.whl"
-          mkdir torch-aarch64 && unzip -q torch.whl -d torch-aarch64 && rm torch.whl
-          echo "LIBTORCH=$PWD/torch-aarch64/torch" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$PWD/torch-aarch64/torch/lib:$PWD/torch-aarch64/torch.libs" >> "$GITHUB_ENV"
-          echo "LIBTORCH_BYPASS_VERSION_CHECK=1" >> "$GITHUB_ENV"
-          # the wheel is a PRE-cxx11-ABI build — torch-sys defaults to 1
-          echo "LIBTORCH_CXX11_ABI=0" >> "$GITHUB_ENV"
+          curl -fsSL -o /tmp/ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-aarch64-${ONNXRUNTIME_VERSION}.tgz"
+          tar xzf /tmp/ort.tgz -C /opt
+          rm /tmp/ort.tgz
+          echo "ORT_DYLIB_PATH=/opt/onnxruntime-linux-aarch64-${ONNXRUNTIME_VERSION}/lib/libonnxruntime.so" >> "$GITHUB_ENV"
 
-      - name: Set up libtorch (win-x64)
+      - name: Download onnxruntime (win-x64)
         if: matrix.name == 'win-x64'
         shell: pwsh
         run: |
-          curl.exe -fsSL -o libtorch.zip "https://download.pytorch.org/libtorch/cpu/libtorch-win-shared-with-deps-$env:LIBTORCH_VERSION%2Bcpu.zip"
-          Expand-Archive -Path libtorch.zip -DestinationPath .
-          Remove-Item libtorch.zip
-          "LIBTORCH=$(Get-Location)\libtorch" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "LIBTORCH_BYPASS_VERSION_CHECK=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          curl.exe -fsSL -o ort.zip "https://github.com/microsoft/onnxruntime/releases/download/v$env:ONNXRUNTIME_VERSION/onnxruntime-win-x64-$env:ONNXRUNTIME_VERSION.zip"
+          Expand-Archive -Path ort.zip -DestinationPath .
+          Remove-Item ort.zip
+          $dll = Get-ChildItem -Path ".\onnxruntime-win-x64-$env:ONNXRUNTIME_VERSION" -Recurse -Filter onnxruntime.dll | Select-Object -First 1
+          if (-not $dll) { Write-Error "onnxruntime.dll not found in the extracted zip"; exit 1 }
+          "ORT_DYLIB_PATH=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Graph purity — no tch in the win/linux graphs
+        shell: bash
+        run: |
+          if cargo tree -e normal | grep -Eq '^(tch|torch-sys) v'; then
+            echo "FATAL: tch/torch-sys leaked into the ${{ matrix.name }} (onnx) dependency graph"
+            exit 1
+          fi
+          cargo tree -e normal | grep -q '^ort v' || { echo "FATAL: ort missing from the graph"; exit 1; }
 
       - name: Build
         run: cargo build --release
 
-      - name: Smoke — the binary must start against its libtorch
-        if: runner.os != 'Windows'
-        run: ./target/release/quick_stats --help
-
-      - name: Smoke — exe must start with the libtorch DLLs on PATH (windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
+      # The binary must start WITHOUT the onnxruntime dylib (load-dynamic:
+      # only session creation needs it). This is the new, softer equivalent
+      # of the old "must start against its libtorch" smokes.
+      - name: Smoke — dylib-free start
+        shell: bash
         run: |
-          $env:PATH = "$(Get-Location)\libtorch\lib;$env:PATH"
-          & ".\target\release\quick_stats.exe" --help
-          if ($LASTEXITCODE -ne 0) { Write-Error "quick_stats.exe failed to start"; exit 1 }
+          unset ORT_DYLIB_PATH
+          ./target/release/quick_stats --help
+          ./target/release/quick_stats -e gpu --no-bandwidth --no-benchmark -f json | jq -e '.gpu'
+
+      # With the dylib: run the ONNX GEMM benchmark on the CPU execution
+      # provider (runners have no GPU). Asserts the exit code explicitly —
+      # onnxruntime 1.20-1.22 segfaulted AT EXIT after printing everything.
+      - name: Smoke — ONNX GEMM benchmark (CPU EP)
+        shell: bash
+        run: |
+          echo "ORT_DYLIB_PATH=$ORT_DYLIB_PATH"
+          out=$(./target/release/quick_stats --gpu-benchmark-smoke)
+          echo "$out"
+          echo "$out" | grep -q 'tflops=Some(' || { echo "FATAL: benchmark did not produce TFLOPS"; exit 1; }
+
+      # GPU feature end-to-end against the machine's (empty) device list:
+      # must exit 0 and emit valid JSON.
+      - name: Smoke — gpu feature JSON
+        shell: bash
+        run: |
+          ./target/release/quick_stats -e gpu --no-bandwidth --no-benchmark -f json | jq -e '.gpu' > /dev/null
+          echo "gpu feature OK"
 
       - name: Stage artifact (registry naming convention)
         shell: bash

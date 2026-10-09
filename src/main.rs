@@ -5,14 +5,13 @@ mod info;
 use benchmark::{cpu::benchmark_cpu, gpu::benchmark_gpu};
 use clap::{Arg, Command};
 use info::cpu::get_cpu_info;
-use info::gpu::get_gpu_info;
+use info::gpu::{get_gpu_info, Accelerator};
 use info::network::{get_internet_speed, get_ping, get_public_ip};
 use info::power::{get_battery_info, BatteryInfo};
 use info::drives::get_drives_info;
 use serde_json::{json, Value};
 use std::fs::File;
 use std::io::{self, Write};
-use tch::Device;
 use tokio::runtime::Runtime;
 
 fn main() -> io::Result<()> {
@@ -22,6 +21,24 @@ fn main() -> io::Result<()> {
     let features: Vec<&String> = matches.get_many::<String>("features").unwrap().collect();
     let no_benchmark = matches.get_flag("no-benchmark");
     let no_bandwidth = matches.get_flag("no-bandwidth");
+
+    // CI smoke (hidden flag): one short GEMM benchmark run on the CPU
+    // execution provider, then exit. Proves the onnx runtime loads and the
+    // committed GEMM model runs without needing a GPU on the runner.
+    if matches.get_flag("gpu_benchmark_smoke") {
+        let (tflops, duration, ep) = benchmark_gpu(Accelerator::Cpu, 20);
+        println!(
+            "GPU benchmark smoke: ep={} tflops={:?} duration={:?}s",
+            ep, tflops, duration
+        );
+        match tflops {
+            Some(t) if t > 0.0 => return Ok(()),
+            _ => {
+                eprintln!("GPU benchmark smoke FAILED (ep={ep})");
+                std::process::exit(1);
+            }
+        }
+    }
 
     let mut cpu_info = None;
     let mut cpu_gflops = None;
@@ -148,6 +165,13 @@ fn configure_cli() -> clap::ArgMatches {
                 .long("no-bandwidth")
                 .help("Skip internet speed measurement")
                 .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("gpu_benchmark_smoke")
+                .long("gpu-benchmark-smoke")
+                .help("Run one short GEMM benchmark on the CPU execution provider and exit (CI smoke)")
+                .action(clap::ArgAction::SetTrue)
+                .hide(true),
         )
         .get_matches()
 }
@@ -414,7 +438,7 @@ fn get_mps_gpu_info(no_benchmark: bool) -> io::Result<Vec<serde_json::Value>> {
 
     for info in gpu_infos.into_iter() {
         // Only process MPS devices
-        if matches!(info.device, Device::Mps) {
+        if matches!(info.device, Accelerator::Mps) {
             let mut gpu_json = json!({
                 "device": "MPS",
                 "name": info.name.unwrap_or_else(|| "Not available".to_string()),
@@ -426,9 +450,14 @@ fn get_mps_gpu_info(no_benchmark: bool) -> io::Result<Vec<serde_json::Value>> {
             });
 
             if !no_benchmark {
-                let (gpu_tflops, gpu_elapsed_time) = benchmark_gpu(Device::Mps, 1000);
-                gpu_json["tflops"] = json!(gpu_tflops);
-                gpu_json["duration"] = json!(gpu_elapsed_time);
+                let (gpu_tflops, gpu_elapsed_time, ep) = benchmark_gpu(Accelerator::Mps, 1000);
+                gpu_json["ep"] = json!(ep);
+                if let Some(tflops) = gpu_tflops {
+                    gpu_json["tflops"] = json!(tflops);
+                }
+                if let Some(duration) = gpu_elapsed_time {
+                    gpu_json["duration"] = json!(duration);
+                }
             }
 
             gpu_results.push(gpu_json);
@@ -455,9 +484,14 @@ fn get_cuda_gpus_info(no_benchmark: bool) -> io::Result<Vec<serde_json::Value>> 
         });
 
         if !no_benchmark {
-            let (gpu_tflops, gpu_elapsed_time) = benchmark_gpu(Device::Cuda(index), 1000);
-            gpu_json["tflops"] = json!(gpu_tflops);
-            gpu_json["duration"] = json!(gpu_elapsed_time);
+            let (gpu_tflops, gpu_elapsed_time, ep) = benchmark_gpu(Accelerator::Cuda(index), 1000);
+            gpu_json["ep"] = json!(ep);
+            if let Some(tflops) = gpu_tflops {
+                gpu_json["tflops"] = json!(tflops);
+            }
+            if let Some(duration) = gpu_elapsed_time {
+                gpu_json["duration"] = json!(duration);
+            }
         }
 
         gpu_results.push(gpu_json);
@@ -507,6 +541,9 @@ fn format_mps_gpu_plain(gpu_data: &Vec<serde_json::Value>) -> String {
                 "        GPU FLOPS           : {:.2} TFLOPS\n",
                 tflops.as_f64().unwrap_or(0.0)
             ));
+        }
+        if let Some(ep) = gpu.get("ep").and_then(|v| v.as_str()) {
+            output.push_str(&format!("        Execution Provider  : {}\n", ep));
         }
         if let Some(duration) = gpu.get("duration") {
             output.push_str(&format!(
@@ -578,6 +615,10 @@ fn format_cuda_gpus_plain(gpu_data: &Vec<serde_json::Value>) -> String {
                 "GPU Estimated FLOPS: {:.2} TFLOPS\n",
                 tflops.as_f64().unwrap_or(0.0)
             ));
+        }
+
+        if let Some(ep) = gpu.get("ep").and_then(|v| v.as_str()) {
+            output.push_str(&format!("Execution Provider: {}\n", ep));
         }
 
         if let Some(duration) = gpu.get("duration") {

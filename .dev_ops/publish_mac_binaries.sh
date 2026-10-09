@@ -5,12 +5,12 @@
 #
 # For the apple target (arm64 — Intel macOS dropped 2026-10, LinkMesh
 # decision) this script:
-#   1. builds quick_stats against the SAME libtorch (2.2.2, matching arch)
+#   1. builds quick_stats against the SAME libtorch (2.4.0, matching arch)
 #      that LinkMesh stages under libs/mac, so the published artifact and
-#      the desktop's runtime libtorch cannot drift. NB: linkmesh's own
-#      doc_processor now stages libtorch 2.4.0 (tch 0.17 via the Luxbit
-#      forks) — but quick_stats' tch 0.15 still pairs with 2.2.2, whose
-#      arm64 tree remains staged alongside.
+#      the desktop's runtime libtorch cannot drift. quick_stats bumped to
+#      tch 0.17 in lockstep with linkmesh's doc_processor (2026-10,
+#      ONNX-on-win/linux); tch 0.17
+#      pairs with libtorch 2.4.0 exactly, so no version-check bypass.
 #   2. stages it as builds/quick_stats-<version>-mac-<arch> (version = the
 #      Cargo.toml version — that is the registry key)
 #   3. uploads it to THIS project's generic package registry, the pinned
@@ -43,7 +43,7 @@ VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 
 LINKMESH_DIR="${LINKMESH_DIR:-$HOME/git_repos/linkmesh}"
 LIBTORCH_ROOT="${LIBTORCH_ROOT:-$LINKMESH_DIR/libs/mac}"
-LIBTORCH_VERSION=2.2.2
+LIBTORCH_VERSION=2.4.0
 GITLAB_URL="${GITLAB_URL:-https://gitlab.byte.lu}"
 PROJECT_ID="${PROJECT_ID:-14}"   # olivier/quick_stats
 
@@ -64,12 +64,16 @@ for arch in arm64; do
     exit 1
   fi
   echo "==> cargo build --release --target=$target (LIBTORCH=$libtorch)"
-  # LIBTORCH_BYPASS_VERSION_CHECK: tch 0.15 hard-codes "expects PyTorch
-  # 2.2.0" and rejects 2.2.2; same-series patch release, identical CPU C++
-  # ABI — the bypass is the documented escape hatch for exactly this.
   LIBTORCH="${libtorch}" LIBTORCH_INCLUDE="${libtorch}" LIBTORCH_LIB="${libtorch}" \
-    LIBTORCH_BYPASS_VERSION_CHECK=1 \
     cargo build --release --target="$target"
+
+  # Graph purity (mirrors the doc_processor verification): the mac binary
+  # runs the torch backend — no ort anywhere in its graph.
+  if cargo tree --target "$target" -e normal | grep -Eq '^(ort|ort-sys) v'; then
+    echo "FATAL: ort leaked into the mac (torch) dependency graph"
+    exit 1
+  fi
+
   cp "$TARGET_DIR/$target/release/quick_stats" "builds/quick_stats-${VERSION}-mac-${arch}"
   chmod +x "builds/quick_stats-${VERSION}-mac-${arch}"
 done

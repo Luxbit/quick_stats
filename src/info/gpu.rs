@@ -1,12 +1,22 @@
 use crate::helpers::bytes_to_megabytes;
 use std::process::Command;
 use sysinfo::System;
-use tch::{Cuda, Device};
+
+/// Backend-neutral accelerator handle, replacing the `tch::Device` that used
+/// to thread through this module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Accelerator {
+    Cuda(usize),
+    Mps,
+    /// Only used by the `--gpu-benchmark-smoke` CI flag — never reported as a
+    /// discovered device.
+    Cpu,
+}
 
 #[derive(Debug)]
 pub struct GpuInfo {
     pub device_id: usize,
-    pub device: Device,
+    pub device: Accelerator,
     pub name: Option<String>,
     pub total_memory: Option<u64>,
     pub used_memory: Option<u64>,
@@ -20,6 +30,8 @@ pub struct GpuInfo {
     pub vendor: Option<String>,
 }
 
+/// (Windows/Linux) nvidia-smi parsers — the whole CUDA info path.
+#[cfg(not(target_os = "macos"))]
 fn get_nvidia_versions() -> (Option<String>, Option<String>) {
     let output = Command::new("nvidia-smi")
         .args(&["--version"])
@@ -54,6 +66,8 @@ fn get_nvidia_versions() -> (Option<String>, Option<String>) {
     (None, None)
 }
 
+/// (Windows/Linux) nvidia-smi parsers — the whole CUDA info path.
+#[cfg(not(target_os = "macos"))]
 fn get_nvidia_gpu_name(device_id: usize) -> Option<String> {
     let output = Command::new("nvidia-smi")
         .args(&["-L"])
@@ -83,6 +97,8 @@ fn get_nvidia_gpu_name(device_id: usize) -> Option<String> {
     None
 }
 
+/// (Windows/Linux) nvidia-smi parsers — the whole CUDA info path.
+#[cfg(not(target_os = "macos"))]
 fn query_nvidia_gpu(
     device_id: usize,
 ) -> (
@@ -131,6 +147,7 @@ fn query_nvidia_gpu(
     (name, total, used, compute_capability, cuda_version, driver_version, None, None, None)
 }
 
+#[cfg(target_os = "macos")]
 fn query_mps_gpu() -> (
     Option<String>,
     Option<u64>,
@@ -195,13 +212,32 @@ fn query_mps_gpu() -> (
     )
 }
 
+/// CUDA device discovery without libtorch: parse `nvidia-smi -L` (the same
+/// source the per-GPU queries already use). Replaces `tch::Cuda::device_count`
+/// which was always 0 in the released win/linux builds (CPU-only libtorch).
+#[cfg(not(target_os = "macos"))]
+fn cuda_device_ids() -> Vec<usize> {
+    let output = match Command::new("nvidia-smi").arg("-L").output() {
+        Ok(out) if out.status.success() => out,
+        _ => return Vec::new(),
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            // "GPU 0: NVIDIA GeForce RTX 3090 (UUID: GPU-…)"
+            let rest = line.trim().strip_prefix("GPU ")?;
+            rest.split(':').next()?.trim().parse::<usize>().ok()
+        })
+        .collect()
+}
+
 pub fn get_gpu_info() -> Vec<GpuInfo> {
     let mut gpu_info_list = Vec::new();
 
-    // Check for CUDA devices
-    let cuda_device_count = Cuda::device_count() as usize;
-    for device_id in 0..cuda_device_count {
-        let device = Device::Cuda(device_id);
+    // CUDA devices (Windows/Linux only — libtorch always reported 0 here:
+    // the CI builds linked CPU-only libtorch, see the plan doc)
+    #[cfg(not(target_os = "macos"))]
+    for device_id in cuda_device_ids() {
         let (
             name,
             total_memory,
@@ -216,7 +252,7 @@ pub fn get_gpu_info() -> Vec<GpuInfo> {
 
         let gpu_info = GpuInfo {
             device_id,
-            device,
+            device: Accelerator::Cuda(device_id),
             name,
             total_memory,
             used_memory,
@@ -250,7 +286,7 @@ pub fn get_gpu_info() -> Vec<GpuInfo> {
         if name.is_some() {
             let gpu_info = GpuInfo {
                 device_id: 0,
-                device: Device::Mps,
+                device: Accelerator::Mps,
                 name,
                 total_memory,
                 used_memory,
