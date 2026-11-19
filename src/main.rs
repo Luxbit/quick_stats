@@ -2,7 +2,10 @@ mod benchmark;
 mod helpers;
 mod info;
 
-use benchmark::{cpu::benchmark_cpu, gpu::benchmark_gpu};
+use benchmark::{
+    cpu::{benchmark_cpu, ITERATIONS as CPU_ITERATIONS, PRECISION as CPU_PRECISION},
+    gpu::{benchmark_gpu, ITERATIONS as GPU_ITERATIONS, PRECISION as GPU_PRECISION},
+};
 use clap::{Arg, Command};
 use info::cpu::get_cpu_info;
 use info::gpu::{get_gpu_info, Accelerator};
@@ -55,7 +58,7 @@ fn main() -> io::Result<()> {
         cpu_info = Some(cpu_info_data);
 
         if !no_benchmark {
-            let (gflops, elapsed_time) = benchmark_cpu(5);
+            let (gflops, elapsed_time) = benchmark_cpu(CPU_ITERATIONS);
             cpu_gflops = Some(gflops);
             cpu_elapsed_time = Some(elapsed_time);
         }
@@ -214,6 +217,10 @@ fn generate_json_output(
 
         if let Some(gflops) = cpu_gflops {
             cpu_json["gflops"] = json!(gflops);
+            // Precision/iterations describe how `gflops` was produced, so the
+            // figures stay auditable and cross-precision comparisons obvious.
+            cpu_json["precision"] = json!(CPU_PRECISION);
+            cpu_json["iterations"] = json!(CPU_ITERATIONS);
         }
 
         if let Some(elapsed) = cpu_elapsed_time {
@@ -391,7 +398,11 @@ fn format_cpu_info(
     );
 
     if cpu_gflops > 0.0 {
-        output.push_str(&format!("        FLOPS       : {:.2} GFLOPS\n", cpu_gflops));
+        output.push_str(&format!(
+            "        FLOPS       : {:.2} GFLOPS ({})\n",
+            cpu_gflops,
+            CPU_PRECISION.to_uppercase()
+        ));
     }
 
     if cpu_elapsed_time > 0.0 {
@@ -450,8 +461,10 @@ fn get_mps_gpu_info(no_benchmark: bool) -> io::Result<Vec<serde_json::Value>> {
             });
 
             if !no_benchmark {
-                let (gpu_tflops, gpu_elapsed_time, ep) = benchmark_gpu(Accelerator::Mps, 1000);
+                let (gpu_tflops, gpu_elapsed_time, ep) = benchmark_gpu(Accelerator::Mps, GPU_ITERATIONS);
                 gpu_json["ep"] = json!(ep);
+                gpu_json["precision"] = json!(GPU_PRECISION);
+                gpu_json["iterations"] = json!(GPU_ITERATIONS);
                 if let Some(tflops) = gpu_tflops {
                     gpu_json["tflops"] = json!(tflops);
                 }
@@ -484,8 +497,10 @@ fn get_cuda_gpus_info(no_benchmark: bool) -> io::Result<Vec<serde_json::Value>> 
         });
 
         if !no_benchmark {
-            let (gpu_tflops, gpu_elapsed_time, ep) = benchmark_gpu(Accelerator::Cuda(index), 1000);
+            let (gpu_tflops, gpu_elapsed_time, ep) = benchmark_gpu(Accelerator::Cuda(index), GPU_ITERATIONS);
             gpu_json["ep"] = json!(ep);
+            gpu_json["precision"] = json!(GPU_PRECISION);
+            gpu_json["iterations"] = json!(GPU_ITERATIONS);
             if let Some(tflops) = gpu_tflops {
                 gpu_json["tflops"] = json!(tflops);
             }
@@ -538,8 +553,9 @@ fn format_mps_gpu_plain(gpu_data: &Vec<serde_json::Value>) -> String {
 
         if let Some(tflops) = gpu.get("tflops") {
             output.push_str(&format!(
-                "        GPU FLOPS           : {:.2} TFLOPS\n",
-                tflops.as_f64().unwrap_or(0.0)
+                "        GPU FLOPS           : {:.2} TFLOPS ({})\n",
+                tflops.as_f64().unwrap_or(0.0),
+                GPU_PRECISION.to_uppercase()
             ));
         }
         if let Some(ep) = gpu.get("ep").and_then(|v| v.as_str()) {
@@ -612,8 +628,9 @@ fn format_cuda_gpus_plain(gpu_data: &Vec<serde_json::Value>) -> String {
 
         if let Some(tflops) = gpu.get("tflops") {
             output.push_str(&format!(
-                "GPU Estimated FLOPS: {:.2} TFLOPS\n",
-                tflops.as_f64().unwrap_or(0.0)
+                "GPU Estimated FLOPS: {:.2} TFLOPS ({})\n",
+                tflops.as_f64().unwrap_or(0.0),
+                GPU_PRECISION.to_uppercase()
             ));
         }
 

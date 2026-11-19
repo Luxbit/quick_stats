@@ -1,5 +1,17 @@
 use crate::info::gpu::Accelerator;
 
+/// Iterations used by `main`. Reported in the JSON output so the FLOPS figure
+/// can be reproduced from `duration` alone.
+pub const ITERATIONS: u64 = 1000;
+
+/// Matrix edge length: an `SIZE x SIZE` GEMM produces `2 * SIZE^3` FLOPs.
+pub const SIZE: usize = 1024;
+
+/// Precision actually measured below (f32 in both backends). Surfaced in the
+/// JSON output as `"precision"`. Note this differs from `cpu::PRECISION`
+/// (`fp64`), so the two FLOPS figures are not directly comparable.
+pub const PRECISION: &str = "fp32";
+
 /// Benchmark the given accelerator with a 1024x1024 float32 GEMM and return
 /// `(tflops, duration_seconds, execution_provider)`. `tflops`/`duration` are
 /// `None` when the benchmark could not run (missing onnxruntime, no EP…); the
@@ -26,9 +38,10 @@ mod macos {
             Accelerator::Mps => (Device::Mps, "MPS"),
             Accelerator::Cpu => (Device::Cpu, "CPU"),
         };
-        let size = 1024;
+        let size = super::SIZE as i64;
 
-        // Create two large tensors filled with random values
+        // Create two large tensors filled with random values (FP32: see
+        // `super::PRECISION`)
         let a = Tensor::rand(&[size, size], (tch::Kind::Float, tch_device));
         let b = Tensor::rand(&[size, size], (tch::Kind::Float, tch_device));
 
@@ -75,7 +88,8 @@ mod onnx {
     use std::time::Instant;
 
     static GEMM_MODEL: &[u8] = include_bytes!("../../models/gemm_1024.onnx");
-    const SIZE: i64 = 1024;
+    /// Must match the committed ONNX model's geometry (1024x1024 FLOAT = f32).
+    const SIZE: i64 = super::SIZE as i64;
 
     /// Locate the onnxruntime shared library ort will dlopen, without letting
     /// ort itself try first: a failed dylib load PANICS inside ort (it cannot

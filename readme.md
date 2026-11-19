@@ -4,8 +4,8 @@
 
 ## Features
 
-- Benchmark CPU performance for floating-point operations per second (GFLOPS)
-- Benchmark GPU performance for floating-point operations per second (TFLOPS)
+- Benchmark CPU performance for floating-point operations per second (GFLOPS, **FP64**)
+- Benchmark GPU performance for floating-point operations per second (TFLOPS, **FP32**)
   - Support for CUDA GPUs and Metal Performance Shaders (MPS) for Apple Silicon
 - Check if device has a battery and returns state of charge, charging state and capacity
 - Check upload and download speeds, ping and public IP
@@ -83,6 +83,18 @@ cargo run --release -- --features network --no-bandwidth
   Shaders (MPS) on Apple Silicon
 - **battery**: Battery status (charge level, charging state, capacity) if available
 - **network**: Network diagnostics (ping, public IP, download/upload speeds)
+
+**Precision:** both benchmarks are a 1024x1024 GEMM (`flops = 2 * n^3` per iteration,
+after a 10-iteration warm-up), but they do **not** measure the same precision: the CPU
+benchmark runs **FP64** (`f64`) while the GPU benchmark runs **FP32** (`f32`). The two
+FLOPS figures are therefore not directly comparable across precisions, and the CPU number
+is typically well below that CPU's FP32 peak. The JSON output states this explicitly via
+`"precision"` (`"fp64"` / `"fp32"`) and `"iterations"`, so a FLOPS value can be
+recomputed from the reported duration:
+
+```
+flops = 2 * 1024^3 * iterations      flops_per_second = flops / duration
+```
 
 ## Dependencies
 
